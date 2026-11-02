@@ -107,8 +107,19 @@ SectionEnd
 
 ; Uninstall section
 Section "Uninstall"
-    ; Delete install directory
-    RMDir /r "$INSTDIR"
+    ; models/ 保留用户自行下载的大模型权重，只删随包内置的 3 个轻量模型
+    Delete "$INSTDIR\models\face_detection_yunet_2023mar.onnx"
+    Delete "$INSTDIR\models\modnet.onnx"
+    Delete "$INSTDIR\models\u2netp.onnx"
+    RMDir "$INSTDIR\models"          ; 目录非空（有用户模型）时会保留
+
+    ; Delete remaining install files
+    RMDir /r "$INSTDIR\icons"
+    RMDir /r "$INSTDIR\ort-libs"
+    RMDir /r "$INSTDIR\tools"
+    Delete "$INSTDIR\${APP_EXE}"
+    Delete "$INSTDIR\uninstall.exe"
+    RMDir "$INSTDIR"
 
     ; Delete Start Menu
     RMDir /r "$SMPROGRAMS\${APP_NAME}"

@@ -41,8 +41,12 @@ jobs:
           curl.exe -sL -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
           Expand-Archive ort.zip -DestinationPath ort-tmp -Force
           Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime.dll" $stage/ort-libs/
-          # model weights (verified sources, see models/download.ps1)
-          pwsh -File models/download.ps1 -Dir "$stage/models"
+          # bundled models: only the light trio (~30 MB); heavy models
+          # (BiRefNet 927MB / BEN2 212MB / isnet 170MB) users fetch via
+          # models/download.ps1 and drop into models/ (app scans the dir)
+          pwsh -File models/download.ps1 -Dir "$stage/models" -Only yunet
+          pwsh -File models/download.ps1 -Dir "$stage/models" -Only u2netp
+          pwsh -File models/download.ps1 -Dir "$stage/models" -Only modnet
 
       - name: Install NSIS
         run: choco install nsis -y --no-progress
@@ -65,8 +69,8 @@ jobs:
           body: |
             壹鸣 WonderLand ${{ github.ref_name }}
 
-            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（含 onnxruntime 与常用模型权重，约 1.1 GB）
-            - 便携版：直接运行仓库构建产物，或自行 `cargo build --release`
+            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 100 MB）
+            - 高精度大模型（BiRefNet / BEN2 / InSPyReNet）不随包分发，运行 `models/download.ps1` 下载后放入 `models/` 即可，应用会自动识别
 
             完整变更见「设置 → 更新日志」。
           files: dist/cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe
