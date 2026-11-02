@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>壹鸣 Wonderland — 开源免费的本地抠图与证件照工作台</title>
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="壹鸣 Wonderland" />
+<meta property="og:title" content="壹鸣 Wonderland — 开源免费的本地抠图与证件照工作台" />
+<meta property="og:description" content="本地推理抠图 + 专业证件照制作。永久免费、无广告、无水印、图片不上传，代码开源。" />
+<meta property="og:url" content="https://laosan-x.github.io/Yiming/" />
+<meta property="og:image" content="https://laosan-x.github.io/Yiming/assets/og-image.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="canonical" href="https://laosan-x.github.io/Yiming/" />
+<link rel="icon" type="image/png" sizes="512x512" href="favicon.png" />
+<link rel="apple-touch-icon" href="favicon.png" />
+<meta name="description" content="壹鸣 Wonderland：跨平台桌面工具，本地推理抠图 + 专业证件照制作。永久免费、无广告、无水印、代码开源，支持捐赠。" />
+<style>
+/* ================= 设计变量（Notion 风格） ================= */
+:root{
+  --bg:#ffffff;
+  --bg-soft:#f6f6f7;
+  --bg-hover:#f0f0f2;
+  --ink:#1a1a1c;
+  --ink-2:#36363a;
+  --ink-3:#5e5e62;
+  --ink-4:#8a8a8e;
+  --line:#e9e9eb;
+  --line-soft:rgba(54,54,58,.09);
+  --blue:#2383e2;
+  --green:#0f7b6c;
+  --radius-s:6px; --radius-m:10px; --radius-l:14px;
+  --shadow-s:0 1px 2px rgba(16,16,18,.06);
+  --shadow-m:0 4px 14px rgba(16,16,18,.08),0 1px 3px rgba(16,16,18,.05);
+  --shadow-l:0 12px 40px rgba(16,16,18,.12);
+  --container:1180px;
+  --font:"Inter",ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+img,svg{display:block;max-width:100%}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;font-size:inherit;cursor:pointer;border:0;background:none;color:inherit}
+h1,h2,h3,h4{margin:0;color:var(--ink);font-weight:700;letter-spacing:-.02em;line-height:1.2}
+p{margin:0}
+.container{width:100%;max-width:var(--container);margin:0 auto;padding:0 24px}
+
+/* ================= 通用 ================= */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:0 18px;border-radius:var(--radius-s);font-size:15px;font-weight:500;letter-spacing:-.01em;transition:background .16s ease,box-shadow .16s ease,transform .16s ease,border-color .16s ease;white-space:nowrap}
+.btn-primary{background:var(--ink);color:#fff;box-shadow:var(--shadow-s)}
+.btn-primary:hover{background:#2e2e31;transform:translateY(-1px)}
+.btn-ghost{background:#fff;color:var(--ink-2);border:1px solid var(--line)}
+.btn-ghost:hover{background:var(--bg-soft)}
+.btn-sm{height:34px;padding:0 14px;font-size:14px}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.tag{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:100px;background:var(--bg-soft);border:1px solid var(--line-soft);font-size:13px;color:var(--ink-3);font-weight:500}
+.tag-dot{width:6px;height:6px;border-radius:50%;display:block}
+.section{padding:96px 0}
+.section-soft{background:var(--bg-soft);border-block:1px solid var(--line)}
+.eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);margin-bottom:14px}
+.h2{font-size:clamp(30px,3.6vw,44px);letter-spacing:-.03em}
+.sub{font-size:clamp(16px,1.4vw,18px);color:var(--ink-3);max-width:660px;margin-top:16px}
+.center{text-align:center}
+.center .sub{margin-inline:auto}
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .6s cubic-bezier(.2,.7,.2,1),transform .6s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+
+/* ================= 顶部提示条 ================= */
+.topbar{background:var(--ink);color:#fff;font-size:13.5px}
+.topbar-inner{display:flex;align-items:center;justify-content:center;gap:10px;height:38px;text-align:center}
+.topbar a{color:#fff;text-decoration:underline;text-underline-offset:3px;font-weight:500}
+.topbar .x{opacity:.7;margin-left:2px}
+
+/* ================= 导航 ================= */
+.nav{position:sticky;top:0;z-index:60;background:rgba(255,255,255,.84);backdrop-filter:saturate(180%) blur(14px);border-bottom:1px solid transparent;transition:border-color .2s ease,box-shadow .2s ease}
+.nav.scrolled{border-bottom-color:var(--line);box-shadow:0 1px 3px rgba(16,16,18,.04)}
+.nav-inner{display:flex;align-items:center;gap:16px;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--ink);letter-spacing:-.02em;font-size:17px}
+.brand-mark{width:28px;height:28px;border-radius:7px;display:block;object-fit:cover}
+.brand small{font-weight:500;color:var(--ink-4);font-size:13px;letter-spacing:0}
+.nav-links{display:flex;align-items:center;gap:2px;margin-left:18px}
+.nav-links a{padding:6px 10px;border-radius:var(--radius-s);font-size:14.5px;color:var(--ink-3);font-weight:500;transition:background .15s ease,color .15s ease}
+.nav-links a:hover{background:var(--bg-hover);color:var(--ink)}
+.nav-cta{margin-left:auto;display:flex;align-items:center;gap:10px}
+.burger{display:none;width:38px;height:38px;border-radius:var(--radius-s);align-items:center;justify-content:center}
+.burger:hover{background:var(--bg-hover)}
+.mobile-menu{display:none;border-top:1px solid var(--line);background:#fff;padding:8px 0 16px}
+.mobile-menu.open{display:block}
+.mobile-menu a{display:block;padding:11px 0;font-size:15px;font-weight:500;color:var(--ink-2);border-bottom:1px solid var(--line-soft)}
+.mobile-menu .btn{width:100%;margin-top:14px}
+
+/* ================= Hero ================= */
+.hero{padding:80px 0 60px;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:-20% 0 auto;height:520px;z-index:-1;background:radial-gradient(60% 60% at 50% 0%,rgba(35,131,226,.10),rgba(255,255,255,0) 70%)}
+.hero h1{font-size:clamp(36px,5.8vw,66px);letter-spacing:-.04em;line-height:1.08;margin-top:22px}
+.hero .sub{font-size:clamp(17px,1.7vw,20px);max-width:680px}
+.hero-actions{display:flex;gap:12px;justify-content:center;margin-top:32px;flex-wrap:wrap}
+.pillars{display:flex;gap:8px;justify-content:center;margin-top:22px;flex-wrap:wrap}
+.tag-green{background:rgba(15,123,108,.08);border-color:rgba(15,123,108,.18);color:var(--green)}
+
+/* ================= App 窗口 mockup ================= */
+.window{margin:52px auto 0}
+.app{display:grid;grid-template-columns:196px 1fr 274px;min-height:430px}
+.app-side{border-right:1px solid var(--line);background:#fafafb;padding:14px 12px}
+.app-side h5{margin:0 0 8px;font-size:11.5px;color:var(--ink-4);letter-spacing:.04em;font-weight:600;padding-left:8px}
+.side-item{display:flex;align-items:center;gap:9px;padding:8px;border-radius:var(--radius-s);font-size:13.5px;color:var(--ink-3);font-weight:500;margin-bottom:2px}
+.side-item svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
+.side-item.on{background:#fff;color:var(--ink);box-shadow:var(--shadow-s)}
+.side-sep{height:1px;background:var(--line);margin:10px 4px}
+.app-main{padding:18px;background:#fff;display:flex;flex-direction:column}
+.app-toolbar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.tbtn{height:30px;padding:0 12px;border-radius:var(--radius-s);border:1px solid var(--line);background:#fff;font-size:12.5px;font-weight:500;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
+.tbtn:hover{background:var(--bg-soft)}
+.tbtn.dark{background:var(--ink);color:#fff;border-color:var(--ink)}
+.stage{flex:1;border:1px dashed #d4d4d8;border-radius:var(--radius-m);background:var(--bg-soft);display:grid;place-items:center;padding:20px;text-align:center;min-height:230px}
+.stage svg{width:26px;height:26px;stroke:var(--ink-4);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;margin:0 auto 10px}
+.stage b{display:block;font-size:14px;color:var(--ink);font-weight:600}
+.stage span{font-size:12.5px;color:var(--ink-4)}
+.stage-solid{border-style:solid;border-color:var(--line);background:#fff}
+.sheet{width:100%;display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.photo{border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#fff;aspect-ratio:25/35}
+.photo svg{width:100%;height:100%}
+.app-foot{margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius-s);overflow:hidden;background:#fff}
+.seg button{padding:5px 11px;font-size:12.5px;color:var(--ink-3);font-weight:500}
+.seg button.on{background:var(--ink);color:#fff}
+.app-panel{border-left:1px solid var(--line);background:#fafafb;padding:16px;overflow:hidden}
+.app-panel h5{margin:0 0 12px;font-size:11.5px;color:var(--ink-4);letter-spacing:.04em;font-weight:600}
+.field{margin-bottom:13px}
+.field label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:6px;font-weight:500}
+.field .val{float:right;color:var(--ink-4)}
+.slider{height:4px;border-radius:100px;background:#e3e3e6;position:relative}
+.slider i{position:absolute;top:-4px;left:0;width:12px;height:12px;border-radius:50%;background:var(--ink);border:2px solid #fff;box-shadow:var(--shadow-s);display:block}
+.presets{display:flex;flex-wrap:wrap;gap:6px}
+.preset{padding:4px 10px;border-radius:100px;border:1px solid var(--line);background:#fff;font-size:12px;color:var(--ink-3);font-weight:500}
+.preset.on{border-color:var(--ink);color:var(--ink)}
+.swatches{display:flex;gap:6px}
+.sw{width:24px;height:24px;border-radius:50%;border:1px solid var(--line);display:block}
+.sw.on{box-shadow:0 0 0 2px var(--ink)}
+.kv{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3);padding:6px 0;border-bottom:1px solid var(--line-soft)}
+.kv:last-child{border-bottom:0}
+.kv b{color:var(--ink-2);font-weight:600}
+.badge-local{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--green);background:rgba(15,123,108,.09);border:1px solid rgba(15,123,108,.18);border-radius:100px;padding:3px 9px}
+.pane{display:none}
+.pane.on{display:block}
+
+/* ================= 真实截图展示（鼠标跟随倾斜 3D） ================= */
+.shot-wrap{perspective:1200px;perspective-origin:50% 50%;margin:52px auto 0;max-width:1080px}
+.shot-stage{
+  position:relative;background:#fff;line-height:0;
+  border-radius:var(--radius-l);overflow:hidden;
+  transform-style:preserve-3d;
+  transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(var(--ty,0px)) scale(var(--sc,1));
+  box-shadow:0 1px 2px rgba(16,16,18,.06),0 6px 18px rgba(16,16,18,.06);
+  transition:transform .12s linear,box-shadow .35s ease;
+  will-change:transform;
+}
+/* 跟随鼠标的高光光斑 */
+.shot-stage::after{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+  background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.34),transparent 62%);
+  transition:opacity .35s ease;
+}
+/* 底部软阴影，随倾斜加深，强化离地感 */
+.shot-stage::before{
+  content:"";position:absolute;left:6%;right:6%;bottom:-26px;height:26px;border-radius:50%;
+  background:radial-gradient(ellipse at center,rgba(16,16,18,.30),transparent 72%);
+  filter:blur(10px);opacity:0;pointer-events:none;
+  transition:opacity .45s ease,transform .45s cubic-bezier(.2,.7,.2,1);
+  transform:translateZ(-40px);
+}
+@media (hover:hover){
+  .shot-wrap:hover .shot-stage{
+    transition:transform .12s linear,box-shadow .35s ease;
+    box-shadow:0 30px 60px -14px rgba(16,16,18,.26),0 12px 24px -10px rgba(16,16,18,.14);
+  }
+  .shot-wrap:not(:hover) .shot-stage{
+    transition:transform .6s cubic-bezier(.2,.7,.2,1),box-shadow .6s ease;
+  }
+  .shot-wrap:hover .shot-stage::after{opacity:1}
+  .shot-wrap:hover .shot-stage::before{opacity:1}
+}
+/* 按下瞬间轻微下沉，像真的按下去 */
+.shot-stage.pressed{transition:transform .12s ease}
+.shot-stage img{width:100%;height:auto;display:none}
+.shot-stage img.on{display:block}
+/* 键盘可达性：Tab 聚焦时给同样的凸起 */
+.shot-stage:focus-visible{outline:2px solid var(--blue);outline-offset:4px}
+.shot-tabs{display:flex;gap:8px;justify-content:center;margin-top:18px;flex-wrap:wrap}
+.shot-tab{height:32px;padding:0 15px;border-radius:100px;border:1px solid var(--line);background:#fff;font-size:13.5px;font-weight:500;color:var(--ink-3);transition:background .16s ease,color .16s ease,border-color .16s ease}
+.shot-tab:hover{background:var(--bg-soft)}
+.shot-tab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.shot-cap{text-align:center;font-size:13px;color:var(--ink-4);margin-top:12px;max-width:720px;margin-inline:auto;line-height:1.6}
+
+/* ================= 数据条 ================= */
+.stats{border-block:1px solid var(--line);background:var(--bg-soft)}
+.stats-inner{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:30px 0}
+.stat{padding:8px 12px;border-left:1px solid var(--line)}
+.stat:first-child{border-left:0}
+.stat b{display:block;font-size:clamp(22px,2.4vw,30px);color:var(--ink);letter-spacing:-.03em;font-weight:700}
+.stat span{font-size:13.5px;color:var(--ink-3)}
+
+/* ================= 承诺四宫格 ================= */
+.promise{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:52px;border:1px solid var(--line);border-radius:var(--radius-l);overflow:hidden;background:#fff}
+.p-item{padding:26px 22px;border-left:1px solid var(--line)}
+.p-item:first-child{border-left:0}
+.p-item svg{width:20px;height:20px;stroke:var(--ink-2);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;margin-bottom:12px}
+.p-item h3{font-size:16px;margin-bottom:6px}
+.p-item p{font-size:14px;color:var(--ink-3)}
+
+/* ================= 功能网格 ================= */
+.grid{display:grid;gap:16px;margin-top:52px}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.grid-2{grid-template-columns:repeat(2,1fr)}
+.card{border:1px solid var(--line);border-radius:var(--radius-l);background:#fff;padding:26px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-m);border-color:#dcdce0}
+.icon{width:44px;height:44px;border-radius:11px;background:var(--bg-soft);border:1px solid var(--line-soft);display:grid;place-items:center;margin-bottom:16px;color:var(--ink-2)}
+.icon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.card h3{font-size:17px;margin-bottom:8px}
+.card p{font-size:14.5px;color:var(--ink-3);line-height:1.7}
+.card ul{margin:10px 0 0;padding-left:18px;font-size:13.5px;color:var(--ink-3)}
+.card li{margin:3px 0}
+
+/* ================= 规格表 ================= */
+.specs{margin-top:52px;border:1px solid var(--line);border-radius:var(--radius-l);overflow:hidden;background:#fff}
+.spec-row{display:grid;grid-template-columns:1.2fr .8fr .8fr 1fr;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line-soft);font-size:14.5px;align-items:center}
+.spec-row:last-child{border-bottom:0}
+.spec-row.head{background:var(--bg-soft);font-size:12.5px;font-weight:600;color:var(--ink-4);letter-spacing:.02em}
+.spec-row span:nth-child(n+2){color:var(--ink-3);font-variant-numeric:tabular-nums}
+.spec-row b{font-weight:600;color:var(--ink)}
+.spec-note{margin-top:14px;font-size:13px;color:var(--ink-4)}
+
+/* ================= 步骤 ================= */
+.steps{margin-top:52px;display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--line);border-radius:var(--radius-l);overflow:hidden;background:#fff}
+.step{padding:28px 24px;border-left:1px solid var(--line)}
+.step:first-child{border-left:0}
+.step-no{width:30px;height:30px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:14px;font-weight:600;margin-bottom:16px}
+.step h3{font-size:16.5px;margin-bottom:8px}
+.step p{font-size:14.5px;color:var(--ink-3)}
+.step-visual{margin-top:18px;border-radius:var(--radius-m);border:1px solid var(--line);background:var(--bg-soft);aspect-ratio:16/10;display:grid;place-items:center;padding:12px}
+.step-visual svg{width:100%;height:100%}
+
+/* ================= 对比 ================= */
+.compare-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:52px}
+.demo{border:1px solid var(--line);border-radius:var(--radius-l);background:#fff;overflow:hidden;transition:box-shadow .2s ease}
+.demo:hover{box-shadow:var(--shadow-m)}
+.compare{position:relative;aspect-ratio:4/3;touch-action:none;user-select:none;overflow:hidden;cursor:ew-resize}
+.compare .layer{position:absolute;inset:0}
+.compare .layer svg,.compare .layer img{width:100%;height:100%;display:block;object-fit:cover;pointer-events:none;-webkit-user-drag:none;user-select:none}
+.compare .after .bg-layer{display:none}
+.compare .before{clip-path:inset(0 calc(100% - var(--pos,50%)) 0 0)}
+.compare .handle{position:absolute;top:0;bottom:0;left:var(--pos,50%);width:2px;background:#fff;box-shadow:0 0 0 1px rgba(16,16,18,.12);pointer-events:none}
+.compare .handle::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:34px;height:34px;border-radius:50%;background:#fff url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%2355555c%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M8 3 4 7l4 4%22/%3E%3Cpath d=%22M4 7h16%22/%3E%3Cpath d=%22m16 21 4-4-4-4%22/%3E%3Cpath d=%22M20 17H4%22/%3E%3C/svg%3E") center/16px 16px no-repeat;box-shadow:0 2px 8px rgba(16,16,18,.22)}
+.compare .flag{position:absolute;top:10px;font-size:11.5px;font-weight:600;padding:4px 9px;border-radius:100px;background:rgba(255,255,255,.92);box-shadow:var(--shadow-s);color:var(--ink-2);backdrop-filter:blur(4px)}
+.compare .flag.l{left:10px}
+.compare .flag.r{right:10px}
+.demo-body{padding:18px 20px 22px;border-top:1px solid var(--line)}
+.demo-body h3{font-size:16px}
+.demo-body p{font-size:14px;color:var(--ink-3);margin-top:6px}
+
+.note{margin-top:12px;font-size:12.5px;color:var(--ink-4);line-height:1.6}
+
+/* ================= 下载 ================= */
+.dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:52px}
+.dl{border:1px solid var(--line);border-radius:var(--radius-l);background:#fff;padding:26px;display:flex;flex-direction:column;transition:box-shadow .2s ease,transform .2s ease}
+.dl:hover{box-shadow:var(--shadow-m);transform:translateY(-3px)}
+.dl svg{width:30px;height:30px;margin-bottom:16px}
+.dl h3{font-size:17px}
+.dl .meta{font-size:13px;color:var(--ink-4);margin-top:4px}
+.dl ul{margin:14px 0 0;padding-left:18px;font-size:13.5px;color:var(--ink-3);flex:1}
+.dl .btn{margin-top:18px;width:100%}
+.dl-note{margin-top:18px;font-size:13px;color:var(--ink-4);text-align:center}
+.dl-note code{background:var(--bg-soft);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12.5px}
+
+/* ================= 开源 / 捐赠 ================= */
+.oss{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:52px;align-items:stretch}
+.oss-card{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius-l);background:#fff;padding:30px 32px}
+.oss-card h3{font-size:18px;margin-bottom:10px;letter-spacing:-.01em}
+.oss-card > p{font-size:14px;color:var(--ink-3);line-height:1.7;margin-bottom:20px}
+.oss-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 20px;padding:16px 0;border-block:1px solid var(--line-soft)}
+.oss-stats div{font-size:12.5px;color:var(--ink-4)}
+.oss-stats b{display:block;font-size:17px;color:var(--ink);letter-spacing:-.02em;margin-bottom:2px}
+.code{background:#fafafb;border:1px solid var(--line);border-radius:var(--radius-m);padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;color:var(--ink-2);display:flex;justify-content:space-between;gap:12px;align-items:center}
+.oss-actions{display:flex;gap:8px;flex-wrap:wrap}
+.oss-actions.margin-top{margin-top:16px}
+.oss-card .oss-actions{margin-top:auto;padding-top:22px}
+.oss-card .note{margin-top:auto;padding-top:22px}
+.code button{font-size:12px;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:3px 9px;flex:none}
+.code button:hover{background:var(--bg-soft)}
+.donate-list{display:flex;flex-direction:column;gap:10px}
+.donate{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:var(--radius-m);padding:12px 14px;transition:background .16s ease}
+.donate:hover{background:var(--bg-soft)}
+.donate .ic{width:32px;height:32px;border-radius:8px;background:var(--bg-soft);border:1px solid var(--line-soft);display:grid;place-items:center;font-size:14px;font-weight:700;color:var(--ink-2);flex:none}
+.donate b{font-size:14.5px;font-weight:600;color:var(--ink);display:block}
+.donate span{font-size:12.5px;color:var(--ink-4)}
+.donate .go{margin-left:auto;font-size:13px;color:var(--ink-4)}
+.bar{height:8px;border-radius:100px;background:var(--line);overflow:hidden;margin-top:18px}
+.bar i{display:block;height:100%;background:var(--green);border-radius:100px}
+
+/* ================= CTA ================= */
+.cta{margin-top:96px;border:1px solid var(--line);border-radius:20px;background:var(--bg-soft);padding:56px 32px;text-align:center}
+.cta h2{font-size:clamp(28px,3.2vw,40px);letter-spacing:-.03em}
+.cta p{margin-top:14px;color:var(--ink-3);font-size:16.5px}
+.cta .hero-actions{margin-top:28px}
+
+/* ================= 页脚 ================= */
+.footer{border-top:1px solid var(--line);padding:64px 0 40px;background:#fff}
+.footer-grid{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
+.footer h4{font-size:13px;color:var(--ink-4);font-weight:600;margin-bottom:14px;letter-spacing:.02em}
+.footer a{display:block;font-size:14px;color:var(--ink-3);padding:5px 0}
+.footer a:hover{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.footer-bottom{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:16px;font-size:13px;color:var(--ink-4);flex-wrap:wrap}
+
+/* ================= 响应式 ================= */
+@media (max-width:1100px){
+  .app{grid-template-columns:180px 1fr 250px}
+}
+@media (max-width:980px){
+  .nav-links{display:none}
+  .burger{display:flex}
+  .grid-3,.dl-grid{grid-template-columns:repeat(2,1fr)}
+  .oss{grid-template-columns:1fr}
+  .steps{grid-template-columns:repeat(2,1fr)}
+  .step:nth-child(3){border-left:0}
+  .step:nth-child(n+3){border-top:1px solid var(--line)}
+  .promise{grid-template-columns:repeat(2,1fr)}
+  .p-item:nth-child(3){border-left:0}
+  .p-item:nth-child(n+3){border-top:1px solid var(--line)}
+  .compare-grid{grid-template-columns:1fr;max-width:520px;margin-inline:auto}
+  .footer-grid{grid-template-columns:1fr 1fr}
+  .app{grid-template-columns:1fr}
+  .app-side,.app-panel{display:none}
+  .window-tabs{margin-left:auto}
+}
+@media (max-width:720px){
+  .section{padding:64px 0}
+  .hero{padding:52px 0 40px}
+  .container{padding:0 18px}
+  .window{margin-top:36px;border-radius:12px}
+  .grid-3,.grid-2,.dl-grid{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr}
+  .step{border-left:0}
+  .step + .step{border-top:1px solid var(--line)}
+  .promise{grid-template-columns:1fr}
+  .p-item{border-left:0}
+  .p-item + .p-item{border-top:1px solid var(--line)}
+  .stats-inner{grid-template-columns:1fr 1fr}
+  .stat:nth-child(3){border-left:0}
+  .stat:nth-child(n+3){border-top:1px solid var(--line);padding-top:14px;margin-top:6px}
+  .footer-grid{grid-template-columns:1fr;gap:24px}
+  .cta{padding:40px 20px;margin-top:64px}
+  .hero-actions .btn{flex:1;min-width:150px}
+  .nav-cta .gh{display:none}
+  .nav-inner{gap:8px}
+  .spec-row{grid-template-columns:1fr 1fr;gap:6px;padding:12px 16px}
+  .spec-row.head{display:none}
+  .spec-row span:nth-child(2){grid-column:1}
+  .sheet{grid-template-columns:repeat(4,1fr)}
+  .topbar-inner{font-size:12.5px;padding:0 12px;height:44px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important;scroll-behavior:auto}
+  .reveal{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ================= 顶部提示条 ================= -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <span>壹鸣 Wonderland 永久免费、无广告、代码开源 —— 觉得好用可以<a href="#donate">请作者喝杯咖啡</a> <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><path d="M6 2v2"/><path d="M10 2v2"/><path d="M14 2v2"/></svg></span>
+  </div>
+</div>
+
+<!-- ================= 导航 ================= -->
+<header class="nav" id="nav">
+  <div class="container">
+    <div class="nav-inner">
+      <a class="brand" href="#top">
+        <img class="brand-mark" src="favicon.png" alt="壹鸣 Wonderland logo" />
+        <span>壹鸣 Wonderland <small>Cutout &amp; ID Photo</small></span>
+      </a>
+      <nav class="nav-links">
+        <a href="#app-preview">界面预览</a>
+        <a href="#features">功能</a>
+        <a href="#idphoto">证件照</a>
+        <a href="#how">使用步骤</a>
+        <a href="#compare">效果对比</a>
+        <a href="#download">下载</a>
+        <a href="#oss">开源</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-ghost btn-sm gh" href="#oss">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.9-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.35 4.8-4.58 5.06.36.32.68.94.68 1.9v2.81c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+          GitHub
+        </a>
+        <a class="btn btn-primary btn-sm" href="#download">免费下载</a>
+        <button class="burger" id="burger" aria-label="打开菜单" aria-expanded="false">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="mobile-menu" id="mobileMenu">
+    <div class="container">
+      <a href="#app-preview">界面预览</a>
+      <a href="#features">功能</a>
+      <a href="#idphoto">证件照</a>
+      <a href="#how">使用步骤</a>
+      <a href="#compare">效果对比</a>
+      <a href="#download">下载</a>
+      <a href="#oss">开源与捐赠</a>
+      <a class="btn btn-primary" href="#download">免费下载</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ================= Hero ================= -->
+<section class="hero">
+  <div class="container center">
+    <span class="tag"><span class="tag-dot" style="background:var(--green)"></span> 本地推理 · 永久免费 · 无广告 · 开源</span>
+    <h1>抠图和证件照，<br>只需一键全部搞定。</h1>
+    <p class="sub">壹鸣 Wonderland 是跨平台的桌面工具：模型在你本机跑，照片不出电脑；不用注册、没有广告、不收费、不带水印。内置 MODNet 与 U²-NetP 人像抠图模型，高精度大模型可按需加载，顺手就能做出一寸、二寸、签证等各种规格的证件照。</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#download">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 18v2h16v-2"/></svg>
+        下载客户端
+      </a>
+    </div>
+    <div class="pillars">
+      <span class="tag tag-green">永久免费</span>
+      <span class="tag tag-green">无广告 · 无水印</span>
+      <span class="tag tag-green">Apache-2.0 开源</span>
+      <span class="tag">Windows · macOS · Linux</span>
+    </div>
+
+    <!-- ===== 真实产品截图 ===== -->
+    <div class="window reveal" id="app-preview">
+      <div class="shot-wrap" id="shotWrap">
+      <div class="shot-stage" id="shotStage" tabindex="0" role="img" aria-label="壹鸣 Wonderland 软件界面截图，可切换查看">
+        <img class="shot on" data-shot="cut" width="2160" height="1393" src="assets/img-01.webp" alt="壹鸣 Wonderland 抠图工具界面截图" loading="eager" decoding="async" />
+        <img class="shot" data-shot="idphoto" width="2160" height="1392" src="assets/img-02.webp" alt="壹鸣 Wonderland 证件照制作界面截图" loading="lazy" decoding="async" />
+        <img class="shot" data-shot="home" width="2160" height="1394" src="assets/img-03.webp" alt="壹鸣 Wonderland 证件照工作台界面截图" loading="lazy" decoding="async" />
+      </div>
+      </div>
+    </div>
+
+    <div class="shot-tabs" id="shotTabs">
+      <button class="shot-tab on" data-shot="cut">抠图工具</button>
+      <button class="shot-tab" data-shot="idphoto">证件照</button>
+      <button class="shot-tab" data-shot="home">证件照工作台</button>
+    </div>
+    <p class="shot-cap" id="shotCap">抠图工具：MODNet / U²-NetP 本地推理，边缘阈值、轮廓保护、羽化、去色晕可调，支持透明底 / 白底 / 黑底输出。</p>
+  </div>
+</section>
+
+<!-- ================= 数据条 ================= -->
+<section class="stats">
+  <div class="container">
+    <div class="stats-inner">
+      <div class="stat"><b>0 元</b><span>永久免费，无内购解锁</span></div>
+      <div class="stat"><b>0 条</b><span>广告、埋点与用户追踪</span></div>
+      <div class="stat"><b>100%</b><span>本地推理，照片不出本机</span></div>
+      <div class="stat"><b>Apache-2.0</b><span>代码开源，可自由审计</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 四大承诺 ================= -->
+<section class="section" id="promise">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">Why wonderland</div>
+      <h2 class="h2">一个不打算从你身上赚钱的工具</h2>
+      <p class="sub">它由个人开发者维护，靠社区反馈和自愿捐赠持续迭代。你可以先看代码，再决定要不要装。</p>
+    </div>
+    <div class="promise reveal">
+      <div class="p-item">
+        <svg viewBox="0 0 24 24"><path d="M3 7h18v12H3z"/><path d="M3 11h18"/><path d="M8 15h4"/></svg>
+        <h3>永久免费</h3>
+        <p>全部功能不设付费墙，没有"高级版""导出券"，也不按张数计费。</p>
+      </div>
+      <div class="p-item">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18v12H3z"/><path d="M8 6v12M16 6v12"/><path d="M3 12h18"/></svg>
+        <h3>没有广告</h3>
+        <p>界面里没有 banner、弹窗和推荐位，也不会推送任何形式的营销内容。</p>
+      </div>
+      <div class="p-item">
+        <svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3Z"/><path d="M9.5 12.2l1.8 1.8 3.4-3.6"/></svg>
+        <h3>本地推理</h3>
+        <p>模型在本机 CPU / GPU 上跑，断网可用，照片与素材不会离开你的电脑。</p>
+      </div>
+      <div class="p-item">
+        <svg viewBox="0 0 24 24"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/></svg>
+        <h3>代码开源</h3>
+        <p>Apache-2.0 协议开源在 GitHub，能自行编译、审计、二次开发，也可提交 PR。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 功能 ================= -->
+<section class="section section-soft" id="features">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">Features</div>
+      <h2 class="h2">两个核心能力，做到能日常依赖</h2>
+      <p class="sub">抠图负责把主体干净地取出来，证件照负责按规格排好版直接去打印。</p>
+    </div>
+
+    <div class="grid grid-2 reveal">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 3c4.4 0 8 3.3 8 7.4 0 2.6-1.4 4.9-3.6 6.2L14 21h-4l-2.4-4.4A7.6 7.6 0 0 1 4 10.4C4 6.3 7.6 3 12 3Z"/><path d="M9.5 11.5h5M12 9v5"/></svg></div>
+        <h3>抠图工具 · 本地推理引擎</h3>
+        <p>本地推理引擎，针对商品图、人像、宠物分别调参，输出带 Alpha 通道的透明 PNG。</p>
+        <ul>
+          <li>边缘阈值 / 轮廓保护 / 羽化 / 去色晕 四项可调</li>
+          <li>透明底、白底、黑底与自定义背景一键切换</li>
+          <li>结果 / 对比 / 原图三视图随时对照检查</li>
+          <li>支持批量导入与队列批处理，几百张一次跑完</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="11" r="3"/><path d="M7 18c1-2 2.8-3 5-3s4 1 5 3"/></svg></div>
+        <h3>证件照 · MODNet 人像抠图</h3>
+        <p>上传一张生活照，自动抠人像、换底色、裁尺寸、排版，直接打印或导出电子版。</p>
+        <ul>
+          <li>内置一寸、二寸、考公、教资、护照、签证等常见规格</li>
+          <li>白 / 蓝 / 红 / 灰多底色，300 dpi 高清输出</li>
+          <li>垂直位置与缩放微调，头肩比例更合规</li>
+          <li>六寸相纸排版，含裁切辅助线</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid grid-3 reveal" style="margin-top:16px">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></div>
+        <h3>批量处理</h3>
+        <p>一次拖入整个文件夹，统一参数、统一命名规则，处理完打包导出。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+        <h3>跨平台一致体验</h3>
+        <p>Windows、macOS（Intel / Apple Silicon）、Linux 三端同一套界面与快捷键。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></div>
+        <h3>无水印导出</h3>
+        <p>导出结果不带任何水印与署名，原分辨率保存，商用场景也放心用。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 证件照规格 ================= -->
+<section class="section" id="idphoto">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">ID photo</div>
+      <h2 class="h2">常见规格都已内置</h2>
+      <p class="sub">选中预设即可自动套用尺寸、像素与底色要求，不用再查对照表。</p>
+    </div>
+    <div class="specs reveal">
+      <div class="spec-row head"><span>场景 / 规格</span><span>尺寸（mm）</span><span>像素（300dpi）</span><span>常用底色</span></div>
+      <div class="spec-row"><span><b>一寸</b></span><span>25 × 35</span><span>295 × 413</span><span>白 / 蓝 / 红</span></div>
+      <div class="spec-row"><span><b>二寸</b></span><span>35 × 49</span><span>413 × 579</span><span>白 / 蓝 / 红</span></div>
+      <div class="spec-row"><span><b>小一寸</b></span><span>22 × 32</span><span>260 × 378</span><span>白 / 蓝</span></div>
+      <div class="spec-row"><span><b>大一寸</b></span><span>33 × 48</span><span>390 × 567</span><span>白 / 蓝</span></div>
+      <div class="spec-row"><span><b>护照 / 签证</b></span><span>33 × 48</span><span>390 × 567</span><span>白 / 浅灰</span></div>
+      <div class="spec-row"><span><b>美国签证</b></span><span>51 × 51</span><span>600 × 600</span><span>白</span></div>
+      <div class="spec-row"><span><b>社保 / 驾驶证</b></span><span>26 × 32</span><span>307 × 378</span><span>白 / 蓝</span></div>
+      <div class="spec-row"><span><b>考公 / 教资</b></span><span>按公告要求自定义</span><span>自定义</span><span>白 / 蓝</span></div>
+    </div>
+    <p class="spec-note center">※ 各地公告要求的像素与底色可能微调，软件内预设支持手动覆盖，导出前请对照官方要求确认一次。</p>
+  </div>
+</section>
+
+<!-- ================= 使用步骤 ================= -->
+<section class="section section-soft" id="how">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">How it works</div>
+      <h2 class="h2">从一张照片到一版证件照</h2>
+      <p class="sub">全程离线，四步完成。</p>
+    </div>
+    <div class="steps reveal">
+      <div class="step">
+        <div class="step-no">1</div>
+        <h3>安装并打开</h3>
+        <p>下载对应系统的安装包，无需注册登录，打开即用。</p>
+        <div class="step-visual">
+          <svg viewBox="0 0 160 100" fill="none" stroke="#8a8a8e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="44" y="16" width="72" height="68" rx="6" stroke="#d4d4d8"/>
+            <path d="M80 62V44M72 52l8-8 8 8" stroke="#36363a" stroke-width="2"/>
+            <path d="M58 74h44" stroke="#36363a" stroke-width="2"/>
+          </svg>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-no">2</div>
+        <h3>拖入照片</h3>
+        <p>支持 PNG / JPG / WEBP，可单张导入，也可整个文件夹批量导入。</p>
+        <div class="step-visual">
+          <svg viewBox="0 0 160 100" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="28" y="26" width="104" height="60" rx="8" stroke="#d4d4d8" stroke-dasharray="5 4"/>
+            <circle cx="80" cy="54" r="16" stroke="#2383e2" stroke-width="2"/>
+            <path d="M96 42l14-10M64 42L50 32" stroke="#2383e2" stroke-opacity=".4"/>
+          </svg>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-no">3</div>
+        <h3>选规格、调参数</h3>
+        <p>挑预设规格与底色，必要时微调边缘阈值、羽化或垂直位置。</p>
+        <div class="step-visual">
+          <svg viewBox="0 0 160 100" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="26" y="30" width="40" height="46" rx="4" fill="#f0f0f2" stroke="#d4d4d8"/>
+            <circle cx="46" cy="48" r="9" fill="#fff" stroke="#36363a"/>
+            <path d="M80 40h54M80 54h54M80 68h34" stroke="#d4d4d8"/>
+            <circle cx="98" cy="40" r="5" fill="#fff" stroke="#36363a" stroke-width="1.6"/>
+            <circle cx="120" cy="54" r="5" fill="#fff" stroke="#36363a" stroke-width="1.6"/>
+          </svg>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-no">4</div>
+        <h3>导出或排版打印</h3>
+        <p>导出单张高清图，或按六寸相纸排版，直接送打印店。</p>
+        <div class="step-visual">
+          <svg viewBox="0 0 160 100" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="24" y="26" width="112" height="48" rx="4" fill="#f0f0f2" stroke="#d4d4d8"/>
+            <rect x="34" y="34" width="16" height="22" rx="2" fill="#fff" stroke="#d4d4d8"/>
+            <rect x="54" y="34" width="16" height="22" rx="2" fill="#fff" stroke="#d4d4d8"/>
+            <rect x="74" y="34" width="16" height="22" rx="2" fill="#fff" stroke="#d4d4d8"/>
+            <rect x="94" y="34" width="16" height="22" rx="2" fill="#fff" stroke="#d4d4d8"/>
+            <rect x="114" y="34" width="12" height="22" rx="2" fill="#fff" stroke="#d4d4d8" stroke-dasharray="3 3"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 效果对比 ================= -->
+<section class="section" id="compare">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">Before / After</div>
+      <h2 class="h2">拖动滑块，看看抠掉了什么</h2>
+      <p class="sub">示例为效果演示，左右拖动中间圆点对比原图与抠图结果（灰白格子代表透明区域）。</p>
+    </div>
+
+    <div class="compare-grid">
+      <div class="demo reveal">
+        <div class="compare" data-compare>
+          <div class="layer after checker">
+            <img class="cmp-img" draggable="false" src="assets/img-04.webp" alt="人像抠图后（透明背景）" width="800" height="600" loading="lazy">
+          </div>
+          <div class="layer before">
+            <img class="cmp-img" draggable="false" src="assets/img-05.webp" alt="人像原图" width="800" height="600" loading="lazy">
+          </div>
+          <span class="flag l">原图</span><span class="flag r">抠图后</span><div class="handle"></div>
+        </div>
+        <div class="demo-body"><h3>人像 / 证件照</h3><p>碎发与肩线完整保留，换底色不再出现白边。</p></div>
+      </div>
+
+      <div class="demo reveal">
+        <div class="compare" data-compare>
+          <div class="layer after checker">
+            <img class="cmp-img" draggable="false" src="assets/img-06.webp" alt="商品抠图后（透明背景）" width="800" height="600" loading="lazy">
+          </div>
+          <div class="layer before">
+            <img class="cmp-img" draggable="false" src="assets/img-07.webp" alt="商品原图" width="800" height="600" loading="lazy">
+          </div>
+          <span class="flag l">原图</span><span class="flag r">抠图后</span><div class="handle"></div>
+        </div>
+        <div class="demo-body"><h3>电商商品图</h3><p>金属与塑料反光区不断裂，可直接套白底模板上架。</p></div>
+      </div>
+
+      <div class="demo reveal">
+        <div class="compare" data-compare>
+          <div class="layer after checker">
+            <img class="cmp-img" draggable="false" src="assets/img-08.webp" alt="宠物抠图后（透明背景）" width="800" height="600" loading="lazy">
+          </div>
+          <div class="layer before">
+            <img class="cmp-img" draggable="false" src="assets/img-09.webp" alt="宠物原图" width="800" height="600" loading="lazy">
+          </div>
+          <span class="flag l">原图</span><span class="flag r">抠图后</span><div class="handle"></div>
+        </div>
+        <div class="demo-body"><h3>宠物毛发</h3><p>绒毛边缘逐根保留，胡须不会被误判成背景。</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 下载 ================= -->
+<section class="section" id="download">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">Download</div>
+      <h2 class="h2">挑你的系统，免费下载</h2>
+      <p class="sub">当前版本提供 Windows 安装包；macOS / Linux 可从源码构建（Rust 跨平台）。</p>
+    </div>
+    <div class="dl-grid reveal">
+      <div class="dl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#36363a" stroke-width="1.6"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
+        <h3>Windows</h3>
+        <p class="meta">Windows 10 / 11 · 64 位 · v0.4.0 · 约 40 MB</p>
+        <ul><li>NSIS 安装器，双击安装</li><li>内置 3 个轻量模型，开箱即用</li><li>可选 DirectML GPU 加速</li></ul>
+        <a class="btn btn-primary" href="https://github.com/laosan-x/Yiming/releases/latest" rel="noopener">下载 v0.4.0 安装包</a>
+      </div>
+      <div class="dl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#36363a" stroke-width="1.6"><path d="M8 18c0-5 1-8 4-11 3 3 4 6 4 11z"/><path d="M12 7c0-2 1-3 1-3"/><rect x="4" y="18" width="16" height="2" rx="1"/></svg>
+        <h3>macOS</h3>
+        <p class="meta">规划中 · 现阶段请从源码构建（cargo 跨平台）</p>
+        <ul><li>计划支持公证签名</li><li>Apple Silicon 本地推理</li><li>与 Windows 版功能一致</li></ul>
+        <a class="btn btn-primary" href="https://github.com/laosan-x/Yiming#-安装" rel="noopener">从源码构建</a>
+      </div>
+      <div class="dl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#36363a" stroke-width="1.6"><ellipse cx="12" cy="7" rx="4" ry="3.4"/><path d="M6 20c0-3.4 2.7-6 6-6s6 2.6 6 6"/><path d="M9 9c-.8 1.6-.8 3.4 0 5M15 9c.8 1.6.8 3.4 0 5"/></svg>
+        <h3>Linux</h3>
+        <p class="meta">规划中 · 现阶段请从源码构建（cargo 跨平台）</p>
+        <ul><li>计划提供 AppImage / deb / rpm</li><li>兼容主流桌面环境</li><li>与 Windows 版功能一致</li></ul>
+        <a class="btn btn-primary" href="https://github.com/laosan-x/Yiming#-安装" rel="noopener">从源码构建</a>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:22px;font-size:13.5px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><path d="M15 14c.2-1 .7-1.7 1.5-2.5A5 5 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .2 2.2 1.5 3.5.7.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg> 安装包内置 YuNet 人脸检测 / MODNet / U²-NetP 三个轻量模型，开箱即用；高精度大模型（BiRefNet 927 MB / BEN2 212 MB / InSPyReNet 170 MB）不随包分发——在安装目录运行 <code>models\download.ps1</code> 按需下载，应用会自动识别。</p>
+    </div>
+</section>
+
+<!-- ================= 开源 / 捐赠 ================= -->
+<section class="section section-soft" id="oss">
+  <div class="container">
+    <div class="center reveal">
+      <div class="eyebrow">Open source</div>
+      <h2 class="h2">代码开源，欢迎来查</h2>
+      <p class="sub">整个项目以 Apache-2.0 协议开源，你可以自己编译、改代码、提 Issue 和 PR。</p>
+    </div>
+
+    <div class="oss reveal">
+      <div class="oss-card">
+        <h3>GitHub 仓库</h3>
+        <p>推理引擎、模型加载与界面代码全部公开，版本更新与问题反馈都在仓库里进行。</p>
+        <div class="oss-stats">
+          <div><b>Apache-2.0</b><span>开源协议</span></div>
+          <div><b>公开</b><span>Issue 与路线图</span></div>
+          <div><b>可自行</b><span>编译与打包</span></div>
+        </div>
+        <div class="code"><span id="cloneCmd">git clone https://github.com/laosan-x/Yiming.git</span><button id="copyBtn">复制</button></div>
+        <div class="oss-actions">
+          <a class="btn btn-primary btn-sm" href="https://github.com/laosan-x/Yiming" rel="noopener">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.9-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.35 4.8-4.58 5.06.36.32.68.94.68 1.9v2.81c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+            打开仓库
+          </a>
+          <a class="btn btn-ghost btn-sm" href="https://github.com/laosan-x/Yiming/releases" rel="noopener">查看 Releases</a>
+          <a class="btn btn-ghost btn-sm" href="https://github.com/laosan-x/Yiming/issues" rel="noopener">提交 Issue</a>
+        </div>
+      </div>
+
+      <div class="oss-card" id="donate">
+        <h3>支持一下作者</h3>
+        <p>项目完全免费，开发与维护由作者自费进行。如果它帮你省了时间，欢迎随意赞助。</p>
+        <div class="donate-list">
+          <a class="donate" href="https://afdian.com/a/laosan" target="_blank" rel="noopener"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg></span><span><b>爱发电</b><span>一次性或按月赞助</span></span><span class="go">前往 →</span></a>
+          <a class="donate" href="https://ko-fi.com/laosan" target="_blank" rel="noopener"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><path d="M6 2v2"/><path d="M10 2v2"/><path d="M14 2v2"/></svg></span><span><b>Ko-fi</b><span>请作者喝杯咖啡</span></span><span class="go">前往 →</span></a>
+          <a class="donate" href="https://github.com/laosan-x/Yiming" target="_blank" rel="noopener"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg></span><span><b>给项目点个 Star</b><span>免费，但对作者很重要</span></span><span class="go">前往 →</span></a>
+        </div>
+        <p class="note">赞助不会解锁任何额外功能——所有能力对所有人都一样开放。</p>
+      </div>
+    </div>
+
+    <div class="cta reveal">
+      <h2>现在就把它装到电脑上</h2>
+      <p>永久免费、无广告、开源可审计。用完觉得不错，再来赞助也不迟。</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#download">下载客户端</a>
+        <a class="btn btn-ghost" href="#oss">先看代码</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ================= 页脚 ================= -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <div class="brand"><img class="brand-mark" src="favicon.png" alt="壹鸣 Wonderland logo" /><span>壹鸣 Wonderland <small>Cutout &amp; ID Photo</small></span></div>
+        <p style="margin-top:14px;font-size:14px;color:var(--ink-3);max-width:300px">跨平台 · 永久免费 · 无广告 · 本地推理 · Apache-2.0 开源。让每一张图都能干净地站上任何背景。</p>
+      </div>
+      <div>
+        <h4>产品</h4>
+        <a href="#app-preview">界面预览</a><a href="#features">抠图工具</a><a href="#idphoto">证件照规格</a><a href="#download">下载客户端</a>
+      </div>
+      <div>
+        <h4>开源</h4>
+        <a href="https://github.com/laosan-x/Yiming" target="_blank" rel="noopener">GitHub 仓库</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/laosan-x/Yiming/issues" target="_blank" rel="noopener">提交 Issue</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">使用文档</a>
+      </div>
+      <div>
+        <h4>社区</h4>
+        <a href="#donate">支持作者</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">更新日志</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">常见问题</a><a href="https://afdian.com/a/laosan" target="_blank" rel="noopener">爱发电</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="year">2026</span> 壹鸣 Wonderland · Apache-2.0 License · 永久免费无广告</span>
+      <span>本站由 GitHub Pages 托管 · 图片处理均在本地完成</span>
+    </div>
+  </div>
+</footer>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- 年份 ---------- */
+  document.getElementById("year").textContent = String(new Date().getFullYear());
+
+  /* ---------- 导航 ---------- */
+  var nav = document.getElementById("nav");
+  var burger = document.getElementById("burger");
+  var menu = document.getElementById("mobileMenu");
+
+  window.addEventListener("scroll", function () {
+    nav.classList.toggle("scrolled", window.scrollY > 8);
+  }, { passive: true });
+
+  burger.addEventListener("click", function () {
+    var open = menu.classList.toggle("open");
+    burger.setAttribute("aria-expanded", String(open));
+  });
+  menu.addEventListener("click", function (e) {
+    if (e.target.tagName === "A") {
+      menu.classList.remove("open");
+      burger.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  /* ---------- 滚动淡入 ---------- */
+  var revealEls = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+      });
+    }, { threshold: 0.1, rootMargin: "0px 0px -40px 0px" });
+    revealEls.forEach(function (el) { io.observe(el); });
+  } else {
+    revealEls.forEach(function (el) { el.classList.add("in"); });
+  }
+
+  /* ---------- 真实截图切换 ---------- */
+  var shotTabs = document.querySelectorAll(".shot-tab");
+  var shotImgs = document.querySelectorAll(".shot-stage img");
+  var shotCap = document.getElementById("shotCap");
+  var shotCaps = {
+    cut: "抠图工具：MODNet / U²-NetP 本地推理，边缘阈值、轮廓保护、羽化、去色晕可调，支持透明底 / 白底 / 黑底输出。",
+    idphoto: "证件照：一寸 25\u00d735mm 规格、白蓝红底色可选、MODNet 人像抠图，可微调垂直位置与缩放。",
+    home: "证件照工作台：拖入照片后选择快速预设（一寸蓝底、二寸白底、考公、教资、护照、美国签证等），一键生成排版。"
+  };
+  shotTabs.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var name = b.getAttribute("data-shot");
+      shotTabs.forEach(function (x) { x.classList.toggle("on", x === b); });
+      shotImgs.forEach(function (im) { im.classList.toggle("on", im.getAttribute("data-shot") === name); });
+      if (shotCap) shotCap.textContent = shotCaps[name] || "";
+    });
+  });
+
+  /* ---------- 证件照排版预览（10 张） ---------- */
+  var sheet = document.getElementById("idSheet");
+  if (sheet) {
+    var oneCard =
+      '<svg viewBox="0 0 50 70" xmlns="http://www.w3.org/2000/svg">' +
+      '<rect width="50" height="70" fill="#ffffff"/>' +
+      '<path d="M10 70q0-19 15-19t15 19z" fill="#3f6bd8"/>' +
+      '<path d="M22 45h6v9h-6z" fill="#eec49f"/>' +
+      '<ellipse cx="25" cy="34" rx="10" ry="11" fill="#f7d7b9"/>' +
+      '<path d="M15 32c0-8 4-13 10-13s10 5 10 13c-1-7-4-9-10-9s-9 2-10 9z" fill="#3b2b25"/>' +
+      '<ellipse cx="22" cy="34" rx="1" ry="1.3" fill="#3b2b25"/>' +
+      '<ellipse cx="28" cy="34" rx="1" ry="1.3" fill="#3b2b25"/>' +
+      '<path d="M23 40q2 1.6 4 0" stroke="#c98f74" stroke-width="0.9" fill="none"/>' +
+      '</svg>';
+    var html = "";
+    for (var i = 0; i < 10; i++) html += '<div class="photo">' + oneCard + "</div>";
+    sheet.innerHTML = html;
+  }
+
+  /* ---------- 复制克隆命令 ---------- */
+  var copyBtn = document.getElementById("copyBtn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", function () {
+      var text = document.getElementById("cloneCmd").textContent;
+      var done = function () {
+        copyBtn.textContent = "已复制";
+        setTimeout(function () { copyBtn.textContent = "复制"; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); } catch (e) {}
+        ta.remove(); done();
+      }
+    });
+  }
+
+  /* ---------- 截图区：鼠标跟随 3D 倾斜 ---------- */
+  (function () {
+    var wrap = document.getElementById("shotWrap");
+    var stage = document.getElementById("shotStage");
+    if (!wrap || !stage) return;
+    var fine = window.matchMedia("(hover:hover) and (pointer:fine)").matches;
+    var reduce = window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+    if (!fine || reduce) return;
+
+    var MAX = 9;        /* 最大倾斜角度 */
+    var LIFT = 10;      /* 上浮像素 */
+    var raf = null, target = { rx: 0, ry: 0, ty: 0, sc: 1 };
+
+    function apply() {
+      stage.style.setProperty("--rx", target.rx.toFixed(2) + "deg");
+      stage.style.setProperty("--ry", target.ry.toFixed(2) + "deg");
+      stage.style.setProperty("--ty", target.ty.toFixed(1) + "px");
+      stage.style.setProperty("--sc", target.sc.toFixed(3));
+    }
+    function frame() { raf = null; apply(); }
+    function schedule() { if (raf === null) raf = requestAnimationFrame(frame); }
+
+    var active = false;
+    function reset() {
+      if (!active) return;
+      active = false;
+      target = { rx: 0, ry: 0, ty: 0, sc: 1 };
+      schedule();
+    }
+
+    /* 监听 window 而非元素：卡片倾斜后视觉会收缩，挂在元素上容易误判离开 */
+    window.addEventListener("pointermove", function (e) {
+      if (e.pointerType !== "mouse") return;
+      var r = wrap.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      var px = (e.clientX - r.left) / r.width;
+      var py = (e.clientY - r.top) / r.height;
+      var inside = px >= -0.015 && px <= 1.015 && py >= -0.015 && py <= 1.015;
+      if (!inside) { reset(); return; }
+      active = true;
+      px = Math.max(0, Math.min(1, px));
+      py = Math.max(0, Math.min(1, py));
+      /* 鼠标偏右 -> 绕 Y 正向转；偏上 -> 绕 X 正向转 */
+      target.ry = (px - 0.5) * 2 * MAX;
+      target.rx = -(py - 0.5) * 2 * MAX * 0.75;
+      target.ty = -LIFT;
+      target.sc = 1.02;
+      /* 高光跟随鼠标 */
+      stage.style.setProperty("--mx", (px * 100).toFixed(1) + "%");
+      stage.style.setProperty("--my", (py * 100).toFixed(1) + "%");
+      schedule();
+    }, { passive: true });
+
+    document.addEventListener("pointerleave", reset);
+    window.addEventListener("blur", reset);
+
+    /* 按下时轻微下沉，松开回弹 */
+    wrap.addEventListener("pointerdown", function () {
+      stage.classList.add("pressed");
+      target.ty = -2; target.sc = 1.0; schedule();
+    });
+    ["pointerup", "pointercancel"].forEach(function (t) {
+      wrap.addEventListener(t, function () {
+        stage.classList.remove("pressed");
+        target.ty = -LIFT; target.sc = 1.02; schedule();
+      });
+    });
+
+    /* 键盘可达：方向键控制倾斜 */
+    stage.addEventListener("keydown", function (e) {
+      var step = 3, used = true;
+      if (e.key === "ArrowLeft") target.ry = Math.max(-MAX, target.ry - step);
+      else if (e.key === "ArrowRight") target.ry = Math.min(MAX, target.ry + step);
+      else if (e.key === "ArrowUp") target.rx = Math.min(MAX * 0.75, target.rx + step);
+      else if (e.key === "ArrowDown") target.rx = Math.max(-MAX * 0.75, target.rx - step);
+      else if (e.key === "Escape") target = { rx: 0, ry: 0, ty: 0, sc: 1 };
+      else used = false;
+      if (used) { e.preventDefault(); target.ty = -LIFT; target.sc = 1.02; schedule(); }
+    });
+    stage.addEventListener("blur", function () {
+      target = { rx: 0, ry: 0, ty: 0, sc: 1 }; schedule();
+    });
+  })();
+
+  /* ---------- 前后对比滑块 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-compare]"), function (box) {
+    box.style.setProperty("--pos", "50%");
+    var dragging = false;
+    function setPos(clientX) {
+      var r = box.getBoundingClientRect();
+      var p = (clientX - r.left) / r.width;
+      p = Math.max(0.02, Math.min(0.98, p));
+      box.style.setProperty("--pos", (p * 100) + "%");
+    }
+    box.addEventListener("pointerdown", function (e) {
+      dragging = true; e.preventDefault(); box.setPointerCapture(e.pointerId); setPos(e.clientX);
+    });
+    box.addEventListener("pointermove", function (e) { if (dragging) setPos(e.clientX); });
+    box.addEventListener("pointerup", function () { dragging = false; });
+    box.addEventListener("pointercancel", function () { dragging = false; });
+  });
+
+})();
+</script>
+</body>
+</html>
