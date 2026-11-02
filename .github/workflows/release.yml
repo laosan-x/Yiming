@@ -69,7 +69,7 @@ jobs:
           body: |
             壹鸣 WonderLand ${{ github.ref_name }}
 
-            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 100 MB）
+            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 40 MB）
             - 高精度大模型（BiRefNet / BEN2 / InSPyReNet）不随包分发，运行 `models/download.ps1` 下载后放入 `models/` 即可，应用会自动识别
 
             完整变更见「设置 → 更新日志」。

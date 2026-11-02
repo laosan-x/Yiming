@@ -82,7 +82,7 @@
 
 前往 [**Releases**](https://github.com/laosan-x/Yiming/releases) 下载最新安装包：
 
-- `cocole-iced-v0.4.0-setup.exe` —— NSIS 安装器，双击安装（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 100 MB）
+- `cocole-iced-v0.4.0-setup.exe` —— NSIS 安装器，双击安装（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 40 MB）
 
 > **大模型按需加载**：高精度模型（BiRefNet 927 MB / BEN2 212 MB / InSPyReNet 170 MB）不随安装包分发。
 > 在安装目录（或仓库根目录）执行 `powershell -ExecutionPolicy Bypass -File models\download.ps1` 下载后放入 `models/` 文件夹，应用会自动识别新模型。
