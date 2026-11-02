@@ -142,15 +142,22 @@ cocole-iced <图片路径>        # 启动后直接载入该图并自动抠图
 
 ### 模型下载
 
-神经网络抠图的权重文件不入库，请从官方渠道获取后放入 `models/`：
+神经网络抠图的权重文件不入库，**一键下载（推荐）**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File models\download.ps1
+# 或只下某个模型：-Only modnet
+```
+
+脚本内置全部官方源（已验证可达），自动跳过已存在的文件。各模型也可手动获取：
 
 | 文件 | 来源 |
 |---|---|
-| `modnet.onnx` | [MODNet](https://github.com/ZHKKKe/MODNet) |
-| `birefnet_1024.onnx` | [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) |
+| `modnet.onnx` | [MODNet](https://github.com/ZHKKKe/MODNet)（社区 ONNX 转换：[Xenova/modnet](https://huggingface.co/Xenova/modnet)） |
+| `birefnet_1024.onnx` | [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)（官方 ONNX：[releases v1](https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1)） |
 | `BEN2_Base.onnx` | [BEN2](https://huggingface.co/PramaLLC/BEN2) |
-| `model_fp16.onnx` | [InSPyReNet](https://github.com/plemeri/InSPyReNet) |
-| `u2netp.onnx` | [U²-Net](https://github.com/xuebinqin/U-2-Net) |
+| `model_fp16.onnx` | [InSPyReNet](https://github.com/plemeri/InSPyReNet)（官方无 ONNX 发布，可用同架构的 [isnet-general-use.onnx](https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx)） |
+| `u2netp.onnx` | [U²-Net](https://github.com/xuebinqin/U-2-Net)（官方权重：[rembg 托管](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)） |
 | `face_detection_yunet_2023mar.onnx` | [OpenCV Zoo](https://github.com/opencv/opencv_zoo) |
 
 可通过环境变量 `COCOLE_MODEL_DIR` 指定自定义模型目录。

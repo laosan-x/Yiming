@@ -115,7 +115,7 @@ pub fn model_display_name(file: &str) -> String {
         _ if lower.contains("birefnet") => "【通用-生活场景】_BiRefNet-general".into(),
         _ if lower.contains("ben2") => "【通用-电商产品】_BEN2-Base".into(),
         _ if lower.contains("inspyrenet") || lower.contains("model_fp") => "【通用-人像毛发】_InSPyReNet".into(),
-        _ if lower.contains("modnet") => "【人像-证件照】_MODNet（禁止商用）".into(),
+        _ if lower.contains("modnet") => "【人像-证件照】_MODNet".into(),
         _ if lower.contains("u2netp") => "【通用-图形文言】_u2netp".into(),
         _ if lower.contains("face") || lower.contains("yunet") || lower.contains("scrfd") => "【工具】人脸检测".into(),
         _ => {

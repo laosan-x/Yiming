@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: Stage installer payload
+        shell: pwsh
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          $stage = "dist/cocole-iced-v$env:V-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$stage/icons", "$stage/ort-libs", "$stage/models" | Out-Null
+          Copy-Item target/release/cocole-iced.exe $stage/
+          Copy-Item icons/* $stage/icons/
+          # onnxruntime DLL (load-dynamic)
+          $ver = "1.22.0"
+          curl.exe -sL -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          Expand-Archive ort.zip -DestinationPath ort-tmp -Force
+          Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime.dll" $stage/ort-libs/
+          # model weights (verified sources, see models/download.ps1)
+          pwsh -File models/download.ps1 -Dir "$stage/models"
+
+      - name: Build NSIS installer
+        shell: pwsh
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          makensis -DAPP_VERSION=$env:V installer.nsi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WonderLand ${{ github.ref_name }}
+          body: |
+            壹鸣 WonderLand ${{ github.ref_name }}
+
+            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（含 onnxruntime 与常用模型权重，约 600 MB）
+            - 便携版：直接运行仓库构建产物，或自行 `cargo build --release`
+
+            完整变更见「设置 → 更新日志」。
+          files: dist/cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe
+          fail_on_unmatched_files: true
