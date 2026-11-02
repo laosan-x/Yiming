@@ -1,8 +1,16 @@
 {
-  "star_url": "https://github.com/your-name/your-repo",
+  "star_url": "https://github.com/laosan-x/Yiming",
   "channels": [
-    { "label": "爱发电 · 月度赞助", "icon": "zap", "url": "https://afdian.com/a/laosan" },
-    { "label": "Ko-fi · 国际打赏", "icon": "coffee", "url": "https://ko-fi.com/laosan" }
+    {
+      "label": "爱发电 · 月度赞助",
+      "icon": "zap",
+      "url": "https://afdian.com/a/laosan"
+    },
+    {
+      "label": "Ko-fi · 国际打赏",
+      "icon": "coffee",
+      "url": "https://ko-fi.com/laosan"
+    }
   ],
   "goal": {
     "enabled": false,
