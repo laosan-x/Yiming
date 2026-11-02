@@ -10,7 +10,7 @@
     !define APP_VERSION "0.4.0"
 !endif
 !define APP_PUBLISHER "YiMing"
-!define APP_URL "https://github.com/yiming/cocole-iced"
+!define APP_URL "https://github.com/laosan-x/Yiming"
 !define APP_EXE "cocole-iced.exe"
 
 ; Install directory (default Program Files)

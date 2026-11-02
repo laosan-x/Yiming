@@ -44,12 +44,17 @@ jobs:
           # model weights (verified sources, see models/download.ps1)
           pwsh -File models/download.ps1 -Dir "$stage/models"
 
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+        shell: pwsh
+
       - name: Build NSIS installer
         shell: pwsh
         env:
           V: ${{ steps.ver.outputs.version }}
         run: |
-          makensis -DAPP_VERSION=$env:V installer.nsi
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          & $nsis -DAPP_VERSION=$env:V installer.nsi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
