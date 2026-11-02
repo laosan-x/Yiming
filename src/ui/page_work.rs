@@ -1140,7 +1140,32 @@ fn recompute(app: &mut App) -> Task<Message> {
             if let Some(info) = nn_info {
                 // ── 神经网络路径：软蒙版（毛发 / 半透明边缘以连续 alpha 保留） ──
                 let t0 = std::time::Instant::now();
-                let mask = crate::core::nn::matte(&info, src.as_raw(), w, h)?;
+                // 推理闸门：大模型一次 CPU 推理数十秒、激活内存以 GB 计，且
+                // ORT run 无法中途取消——自动重抠期间若放行并发，多个 1024²
+                // 推理叠加会把内存顶到 10GB+ 直到系统 OOM（进程闪退）。
+                // 这里只有最新一次请求能通过闸门；过期的在门口凭取消令牌自行退出。
+                const NN_GATE_POLL_MS: u64 = 120;
+                loop {
+                    if *cancel_rx.borrow() > seq {
+                        return Err(tr("已取消").to_string());
+                    }
+                    if crate::core::nn::claim_inference() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(NN_GATE_POLL_MS));
+                }
+                // panic 兜底：任何一处索引/解包异常都降级为错误消息，而不是
+                // 让 panic 沿 tokio 阻塞线程炸掉整个进程。
+                let mask = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::core::nn::matte(&info, src.as_raw(), w, h)
+                }));
+                crate::core::nn::release_inference();
+                let mask = match mask {
+                    Ok(r) => r?,
+                    Err(_) => {
+                        return Err(tr("推理线程异常退出（模型可能不兼容当前图片）").to_string())
+                    }
+                };
                 let fg = img::apply_mask(&src, &mask);
                 // base = 当前蒙版快照：画笔「恢复原始」行为与色键路径一致
                 let fg_count = mask.iter().filter(|&&v| v > 127).count();

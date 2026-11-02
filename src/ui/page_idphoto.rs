@@ -59,7 +59,12 @@ fn matte_payload(app: &App, payload: LoadedPayload) -> Task<Message> {
         move || {
             let (w, h) = (payload.rgba.width() as usize, payload.rgba.height() as usize);
             let fg = if let Some(info) = &model_info {
-                match nn::matte(info, payload.rgba.as_raw(), w, h) {
+                if !nn::claim_inference() {
+                    return Err(trf("{} 推理进行中，请稍候再试", &[info.name.as_str()]));
+                }
+                let r = nn::matte(info, payload.rgba.as_raw(), w, h);
+                nn::release_inference();
+                match r {
                     Ok(mask) => imgcore::apply_mask(&payload.rgba, &mask),
                     Err(e) => return Err(trf("{} 抠图失败：{}", &[info.name.as_str(), &e])),
                 }
@@ -1180,7 +1185,12 @@ fn run_batch_one(
 
     // 抠图（与单张链路同一套模型选择 / 回退逻辑）
     let fg = if let Some(info) = model_info {
-        match nn::matte(info, loaded.rgba.as_raw(), w, h) {
+        if !nn::claim_inference() {
+            return Err(tr("推理进行中，请稍候再试").to_string());
+        }
+        let r = nn::matte(info, loaded.rgba.as_raw(), w, h);
+        nn::release_inference();
+        match r {
             Ok(mask) => imgcore::apply_mask(&loaded.rgba, &mask),
             Err(e) => return Err(trf("抠图失败：{}", &[&e])),
         }

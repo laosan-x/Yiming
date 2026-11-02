@@ -707,6 +707,31 @@ pub fn release_all() {
 
 /* ═════════════════ 推理主入口 ═════════════════ */
 
+/// NN 推理全局闸门：同一时刻只允许一个 ONNX 推理在跑。
+///
+/// 大模型（InSPyReNet 等 1024² 档）单次 CPU 推理可达数十秒、激活内存以 GB 计；
+/// 自动重抠场景下旧线程无法中途取消，若放行并发叠加会数倍膨胀内存直至
+/// 系统 OOM 把进程整个杀掉（表现为闪退）。调用方在占闸期间完成的推理
+/// 必须调用 `release_inference` 归还。
+static NN_INFERENCE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 尝试占住推理闸门：`true` = 占住成功，调用方完成后必须调 `release_inference`。
+pub fn claim_inference() -> bool {
+    std::sync::atomic::AtomicBool::compare_exchange(
+        &NN_INFERENCE_BUSY,
+        false,
+        true,
+        std::sync::atomic::Ordering::AcqRel,
+        std::sync::atomic::Ordering::Acquire,
+    )
+    .is_ok()
+}
+
+/// 归还推理闸门（与 `claim_inference` 成对使用）。
+pub fn release_inference() {
+    NN_INFERENCE_BUSY.store(false, std::sync::atomic::Ordering::Release);
+}
+
 /// 从输出里定位 alpha 平面，并回传它的真实尺寸（宽、高）。
 ///
 /// BiRefNet 输出 [1,1,1024,1024]；u2netp 另有 6 路 side 输出（d0..d6），
@@ -752,6 +777,36 @@ fn extract_alpha(out: &ort::value::ValueRef<'_>) -> Result<(Vec<f32>, usize, usi
         ));
     }
     Ok((data[..expected].to_vec(), w, h))
+}
+
+/// 输出 alpha 的 min-max 归一化。
+///
+/// u2net / IS-Net(InSPyReNet) / BiRefNet 这一族的原始输出是**未归一化的
+/// logits**，范围可远超 [0,1]（实测出现 -40 ~ 60 量级）——直接按 [0,1]
+/// 缩放乘 255 会得到全白/全黑蒙版。rembg 对同一批 onnx 的后处理正是
+/// min-max 归一化，这里对齐其行为；范围过小（空输出）时回退全 0。
+fn normalize_minmax(alpha: &mut [f32]) {
+    if alpha.is_empty() {
+        return;
+    }
+    let mut mi = f32::INFINITY;
+    let mut ma = f32::NEG_INFINITY;
+    for &v in alpha.iter() {
+        if v < mi {
+            mi = v;
+        }
+        if v > ma {
+            ma = v;
+        }
+    }
+    let range = ma - mi;
+    if !range.is_finite() || range <= 1e-6 {
+        alpha.fill(0.0);
+        return;
+    }
+    for v in alpha.iter_mut() {
+        *v = (*v - mi) / range;
+    }
 }
 
 /// 执行推理，DirectML 失败时自动降级到 CPU 并重试。
@@ -894,7 +949,8 @@ pub fn matte(info: &NnModelInfo, rgba: &[u8], width: usize, height: usize) -> Re
     let output = run_with_fallback(info, &input, size)?;
     let t_infer = t0.elapsed() - t_pre;
 
-    let (alpha, aw, ah) = output;
+    let (mut alpha, aw, ah) = output;
+    normalize_minmax(&mut alpha);
     let mask = alpha_to_mask(&alpha, aw, ah, width, height);
     let t_post = t0.elapsed() - t_pre - t_infer;
     if diag {
@@ -955,6 +1011,27 @@ mod tests {
 
     /// alpha_to_mask 并行路径与串行逐行结果必须逐字节一致
     /// （行分块多线程改造的回归锁）
+    #[test]
+    /// logits 越界的输出必须被 min-max 拉回 [0,1]，否则蒙版全白（v0.4.0 闪退/异常修复）。
+    fn normalize_minmax_maps_logits_to_unit_range() {
+        // 超出 [0,1] 的原始 logits
+        let mut a = vec![-40.0f32, -10.0, 0.0, 20.0, 60.0];
+        normalize_minmax(&mut a);
+        assert!((a[0] - 0.0).abs() < 1e-5);
+        assert!((a[4] - 1.0).abs() < 1e-5);
+        assert!(a.iter().all(|v| (0.0..=1.0).contains(v)));
+
+        // 常数输出（空范围）→ 全 0，不产生 NaN
+        let mut c = vec![0.5f32; 9];
+        normalize_minmax(&mut c);
+        assert!(c.iter().all(|v| *v == 0.0));
+
+        // 已在 [0,1] 的输出同样成立
+        let mut b = vec![0.0f32, 0.5, 1.0];
+        normalize_minmax(&mut b);
+        assert!((b[2] - 1.0).abs() < 1e-5);
+    }
+
     #[test]
     fn alpha_to_mask_parallel_matches_serial() {
         // 非平凡 alpha：伪随机渐变，覆盖 0..1 全域
