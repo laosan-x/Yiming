@@ -3,7 +3,7 @@ name = "cocole-iced"
 version = "0.4.0"
 edition = "2021"
 description = "壹鸣 · 商品抠图工作台 —— iced 原生复刻版（无 WebView / 无 Electron）"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 # ── UI：iced（Elm 架构 + wgpu 渲染，纯 Rust，无 WebView） ──

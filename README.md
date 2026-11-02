@@ -434,3 +434,23 @@ node tools/gen_sample.mjs hard.rgba 1200 900  hard
 | [NSIS](https://nsis.sourceforge.io/) | zlib | Windows 安装包制作 |
 
 再次向所有上游作者与社区贡献者表示感谢——壹鸣只是站在这些巨人肩膀上的一层薄薄的应用。
+
+---
+
+## 十、许可证 / License
+
+本项目代码以 [Apache-2.0](LICENSE) 许可证开源：
+
+- ✅ 允许商用、修改、再分发（需保留许可证与版权声明）
+- ✅ 附带明确的**专利授权**条款，对基于开源模型构建的应用更稳妥
+- ⚠️ 模型权重（`models/`）**不在本许可证覆盖范围内**，版权归各自上游项目，请遵循其原始许可证获取与使用（见「九、鸣谢」）
+
+```
+Copyright 2026 laosan-x (壹鸣 WonderLand)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+```
