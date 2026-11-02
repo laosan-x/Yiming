@@ -25,5 +25,17 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets
 
+      - name: Prepare test assets (u2netp model + onnxruntime dll)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models, ort-libs | Out-Null
+          # 4.4MB 冒烟测试模型（rembg release, Apache-2.0，URL 与 models/download.ps1 一致）
+          curl.exe -sSL --retry 3 -o models/u2netp.onnx https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx
+          # load-dynamic 运行时 DLL（与 release.yml 同版本）
+          $ver = "1.22.0"
+          curl.exe -sSL --retry 3 -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          Expand-Archive ort.zip -DestinationPath ort-tmp -Force
+          Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime.dll" ort-libs/
+
       - name: cargo test
         run: cargo test
