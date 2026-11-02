@@ -1,0 +1,12 @@
+{
+  "version": "0.4.0",
+  "notes": "壹鸣 WonderLand v0.4.0 首个开源发布。\n- 全新安装包：内置 YuNet / MODNet / U²-NetP 三个轻量模型，开箱即用（约 40 MB）\n- 高精度大模型（BiRefNet / BEN2 / InSPyReNet）改为按需下载，安装包体积大幅缩小\n- 新增模型一键下载脚本 models/download.ps1\n- 新增 CI 与自动发布流程",
+  "pub_date": "2026-11-02",
+  "mandatory": false,
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.0/cocole-iced-v0.4.0-setup.exe",
+      "size": 38876895
+    }
+  }
+}

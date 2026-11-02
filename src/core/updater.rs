@@ -40,10 +40,10 @@ use crate::message::{Message, UpdaterMessage};
 
 /* ═════════════════ 常量 ═════════════════ */
 
-/// 正式清单地址（上线时替换为真实 CDN 地址）
-pub const UPDATE_MANIFEST_URL: &str = "https://update.yiming.app/cocole-iced/manifest.json";
+/// 正式清单地址（仓库根 update-manifest.json，随版本发布同步更新）
+pub const UPDATE_MANIFEST_URL: &str = "https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json";
 /// 清单不可用时的兜底下载页（浏览器打开）
-pub const DOWNLOAD_PAGE_URL: &str = "https://yiming.app/cocole-iced/download";
+pub const DOWNLOAD_PAGE_URL: &str = "https://github.com/laosan-x/Yiming/releases/latest";
 /// 自动检查冷却期：24 小时检查一次
 pub const CHECK_COOLDOWN_SECS: u64 = 24 * 3600;
 /// 启动后延迟检查（错开启动高峰，不与模型扫描抢 IO）
