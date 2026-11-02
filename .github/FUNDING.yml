@@ -1,0 +1,7 @@
+# GitHub Sponsors 配置：仓库页右上角会显示「♥ Sponsor」按钮
+# 文档：https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+ko-fi: laosan
+
+# 爱发电不在 GitHub 内置平台列表中，以自定义链接形式展示
+custom: ['https://afdian.com/a/laosan']
