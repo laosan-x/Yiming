@@ -26,6 +26,12 @@
 > [!NOTE]
 > 当前版本面向 **Windows 10 / 11（x64）**。UI 由 [iced 0.14](https://github.com/iced-rs/iced) 经 wgpu 直接绘制，不依赖任何浏览器组件。
 
+## 🖼️ 应用预览
+
+| 首页 · 新手引导与快速预设 | 抠图工具 · 对比视图与画笔修边 | 证件照 · 换底与相纸排版 |
+|---|---|---|
+| ![首页](docs/screenshots/home.jpg) | ![抠图工具](docs/screenshots/matting.jpg) | ![证件照](docs/screenshots/idphoto.jpg) |
+
 ---
 
 ## ✨ 功能特性
