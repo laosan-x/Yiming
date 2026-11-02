@@ -65,7 +65,7 @@ jobs:
           body: |
             壹鸣 WonderLand ${{ github.ref_name }}
 
-            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（含 onnxruntime 与常用模型权重，约 600 MB）
+            - 安装包：cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe（含 onnxruntime 与常用模型权重，约 1.1 GB）
             - 便携版：直接运行仓库构建产物，或自行 `cargo build --release`
 
             完整变更见「设置 → 更新日志」。
