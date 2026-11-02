@@ -53,8 +53,10 @@ jobs:
         env:
           V: ${{ steps.ver.outputs.version }}
         run: |
-          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          & $nsis -DAPP_VERSION=$env:V installer.nsi
+          $nsis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
+          $define = "-DAPP_VERSION=" + $env:V
+          Write-Host "makensis define: $define"
+          & $nsis $define installer.nsi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
