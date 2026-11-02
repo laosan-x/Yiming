@@ -1,12 +1,12 @@
 {
-  "version": "0.4.0",
-  "notes": "壹鸣 WonderLand v0.4.0 首个开源发布。\n- 全新安装包：内置 YuNet / MODNet / U²-NetP 三个轻量模型，开箱即用（约 40 MB）\n- 高精度大模型（BiRefNet / BEN2 / InSPyReNet）改为按需下载，安装包体积大幅缩小\n- 新增模型一键下载脚本 models/download.ps1\n- 新增 CI 与自动发布流程",
-  "pub_date": "2026-11-02",
+  "version": "0.4.1",
+  "notes": "壹鸣 WonderLand v0.4.1\n- 修复：InSPyReNet 大图抠图时并发推理叠加导致内存溢出闪退（新增全局推理闸门，同一时刻仅一次推理）\n- 修复：u2net / IS-Net 族模型输出未归一化导致蒙版全白或全黑（新增 min-max 归一化后处理）\n- 修复：证件照批量抠图与工具页自动重抠不再互相抢占推理资源",
+  "pub_date": "2026-11-03",
   "mandatory": false,
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.0/cocole-iced-v0.4.0-setup.exe",
-      "size": 38876895
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.1/cocole-iced-v0.4.1-setup.exe",
+      "size": 0
     }
   }
 }

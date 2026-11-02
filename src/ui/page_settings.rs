@@ -610,6 +610,16 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.1",
+            "2026-11-03",
+            tr("修复"),
+            &[
+                tr("修复 InSPyReNet 大图抠图时并发推理叠加导致的内存溢出闪退（新增全局推理闸门）"),
+                tr("修复 u2net / IS-Net 族模型输出未归一化导致的蒙版全白或全黑（min-max 归一化）"),
+                tr("证件照批量抠图与工具页自动重抠不再互相抢占推理资源"),
+            ],
+        ),
+        (
             "0.4.0",
             "2026-10-31",
             tr("新功能"),
