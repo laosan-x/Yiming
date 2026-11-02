@@ -1,0 +1,13 @@
+{
+  "star_url": "https://github.com/your-name/your-repo",
+  "channels": [
+    { "label": "爱发电 · 月度赞助", "icon": "zap", "url": "https://afdian.com/a/laosan" },
+    { "label": "Ko-fi · 国际打赏", "icon": "coffee", "url": "https://ko-fi.com/laosan" }
+  ],
+  "goal": {
+    "enabled": false,
+    "label": "覆盖模型托管与构建服务费用",
+    "target": 500,
+    "current": 0
+  }
+}

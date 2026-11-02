@@ -1,0 +1,732 @@
+//! 国际化（i18n）框架 —— 语言切换 + 翻译查表 + 本地化日期
+//!
+//! 设计：
+//! - 键值对查表（非 gettext）：`tr("nav.work")` → 当前语言文案，缺失回退中文，再缺失回退键名
+//! - 语言全局态（`set_lang`），由设置页切换并随 config 持久化
+//! - 覆盖策略：框架 + 高频文案（导航 / 设置分类 / 新面板）先行；其余页面文案
+//!   按需迁移 —— 把硬编码中文换成 `tr("key")` 并在表中登记即可
+//! - 时区与日期：Windows `GetTimeZoneInformation` 取本地时区偏移，
+//!   `fmt_datetime` 把 UTC 毫秒时间戳转成本地化字符串（zh / en 两种格式）
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::sync::RwLock;
+
+/// 支持的语言
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    /// 简体中文（默认 / 回退语言）
+    Zh,
+    /// English
+    En,
+}
+
+impl std::fmt::Display for Lang {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl Lang {
+    pub const ALL: &'static [Lang] = &[Lang::Zh, Lang::En];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Lang::Zh => "简体中文",
+            Lang::En => "English",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "en" => Lang::En,
+            _ => Lang::Zh,
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Lang::Zh => "zh",
+            Lang::En => "en",
+        }
+    }
+}
+
+static LANG: RwLock<Lang> = RwLock::new(Lang::Zh);
+
+pub fn lang() -> Lang {
+    *LANG.read().unwrap_or_else(|p| p.into_inner())
+}
+
+pub fn set_lang(l: Lang) {
+    *LANG.write().unwrap_or_else(|p| p.into_inner()) = l;
+}
+
+/// 中文表（键 → 中文；zh 是回退语言，键缺失时直接显示键名）
+const ZH: &[(&str, &str)] = &[
+    /* 导航 */
+    ("nav.home", "首页"),
+    ("nav.work", "抠图工作台"),
+    ("nav.work2", "抠图工具"),
+    ("nav.idphoto", "证件照"),
+    ("nav.about", "关于"),
+    ("nav.settings", "设置"),
+    /* 设置分类 */
+    ("panel.engine", "模型与推理引擎"),
+    ("panel.update", "更新"),
+    ("panel.backend", "计算后端"),
+    ("panel.plugin", "模型插件"),
+    ("panel.remote", "远程后端"),
+    ("panel.export", "导出默认值"),
+    ("panel.hotkey", "快捷键"),
+    ("panel.privacy", "隐私"),
+    ("panel.appearance", "外观与通知"),
+    ("panel.changelog", "更新日志"),
+    /* 外观与通知面板 */
+    ("appearance.theme", "主题模式"),
+    ("appearance.accent", "强调色"),
+    ("appearance.accent_default", "默认蓝"),
+    ("appearance.lang", "界面语言"),
+    ("appearance.dnd", "免打扰时段"),
+    ("appearance.dnd.hint", "时段内系统通知静默；应用内消息照常记录"),
+    ("appearance.dnd.start", "开始"),
+    ("appearance.dnd.end", "结束"),
+    /* 消息中心 */
+    ("msg.center", "消息中心"),
+    ("msg.mark_all_read", "全部已读"),
+    ("msg.empty", "暂无消息"),
+    ("msg.unread", "未读"),
+    /* 通用按钮 */
+    ("common.save", "保存"),
+    ("common.cancel", "取消"),
+    ("common.close", "关闭"),
+    ("common.retry", "重试"),
+];
+
+/// 英文表（缺失键回退中文）
+const EN: &[(&str, &str)] = &[
+    ("nav.home", "Home"),
+    ("nav.work", "Matting Studio"),
+    ("nav.work2", "Matting"),
+    ("nav.idphoto", "ID Photo"),
+    ("nav.about", "About"),
+    ("nav.settings", "Settings"),
+    ("panel.engine", "Models & Engine"),
+    ("panel.update", "Updates"),
+    ("panel.backend", "Compute Backend"),
+    ("panel.plugin", "Model Plugins"),
+    ("panel.remote", "Remote Backend"),
+    ("panel.export", "Export Defaults"),
+    ("panel.hotkey", "Shortcuts"),
+    ("panel.privacy", "Privacy"),
+    ("panel.appearance", "Appearance & Notifications"),
+    ("panel.changelog", "Changelog"),
+    ("appearance.theme", "Theme"),
+    ("appearance.accent", "Accent color"),
+    ("appearance.accent_default", "Default blue"),
+    ("appearance.lang", "Language"),
+    ("appearance.dnd", "Do not disturb"),
+    ("appearance.dnd.hint", "System notifications are silenced during this period; in-app messages are still recorded"),
+    ("appearance.dnd.start", "Start"),
+    ("appearance.dnd.end", "End"),
+    ("msg.center", "Notifications"),
+    ("msg.mark_all_read", "Mark all read"),
+    ("msg.empty", "No messages"),
+    ("msg.unread", "unread"),
+    ("common.save", "Save"),
+    ("common.cancel", "Cancel"),
+    ("common.close", "Close"),
+    ("common.retry", "Retry"),
+    ("上传图片", "Upload Image"),
+    ("上传或拍摄人像照片，本地抠图换底、按规格出图，并可排版到相纸直接冲印。图片不上传服务器。", "Upload or capture a portrait, cut out backgrounds locally, compose by spec, and lay out onto photo paper for printing. Images never leave your device."),
+    ("不透明", "Opacity"),
+    ("中间缓存", "Intermediate cache"),
+    ("也可以前往官网手动下载最新安装包。", "You can also download the latest installer from the official website."),
+    ("人像专用 · 发丝级边缘", "Portrait-tuned · hair-level edges"),
+    ("人脸检测模型", "Face detection model"),
+    ("仅左上角", "Top-left only"),
+    ("仅本机配置目录的 config.json", "Only config.json in the system config directory"),
+    ("从不 · 全程本地处理", "Never · fully local processing"),
+    ("从未检查", "Never checked"),
+    ("会话统计", "Session stats"),
+    ("作者：", "By:"),
+    ("保存", "Save"),
+    ("保留投影", "Keep shadow"),
+    ("保留画笔 · 修回主体", "Keep brush · restore subject"),
+    ("全图色键", "Full-image color key"),
+    ("关于页内容已重新加载", "About page content reloaded"),
+    ("其他", "Other"),
+    ("内存 —", "Memory —"),
+    ("内存提示", "Memory estimate"),
+    ("内置本地智能引擎，纯本地推理，图片不上传服务器。支持白底图、纯色背景、模特实拍等电商场景。", "Built-in local engine with fully on-device inference. Supports white-background product shots, solid backgrounds, model photos and more."),
+    ("内置算法 · MODNet + 人脸定位", "Built-in · MODNet + face detection"),
+    ("内置算法 · SmartMatte 色键", "Built-in · SmartMatte color key"),
+    ("刷新", "Refresh"),
+    ("前往下载页", "Go to download page"),
+    ("前景", "Foreground"),
+    ("单张", "Single"),
+    ("单张格式", "Single format"),
+    ("原图", "Original"),
+    ("原始", "Raw"),
+    ("去制作证件照", "Make ID photos"),
+    ("去色晕 Defringe", "Defringe"),
+    ("发现新版本", "Update available"),
+    ("取样阈值 / 边缘宽容 / 羽化 / 形态学等参数见「抠图工具」右侧检查器。", "Fine-tune threshold, edge tolerance, feathering and morphology in the Matting Studio inspector."),
+    ("取消", "Cancel"),
+    ("取消下载", "Cancel download"),
+    ("可用", "Available"),
+    ("合成线程异常退出", "Compositing thread exited abnormally"),
+    ("后端地址", "Backend URL"),
+    ("启动时自动检查更新", "Check for updates automatically"),
+    ("吸管 · 取样背景色", "Picker · sample background color"),
+    ("吸管取样 · 点击画布吸取颜色", "Picker · click the canvas to sample a color"),
+    ("图片", "Images"),
+    ("图片上传", "Image upload"),
+    ("在画布上拖动框选；拖框内可整体移动，拖右下角可缩放。", "Drag on the canvas to crop; drag inside to move, drag the corner to resize."),
+    ("垂直位置", "Vertical position"),
+    ("填充内部孔洞", "Fill inner holes"),
+    ("壹鸣AI智能抠图 · 专业证件照工作台", "Yiming AI Matting · Professional ID Photo Studio"),
+    ("壹鸣抠图 · 使用说明", "Yiming Matting · Guide"),
+    ("处理中", "Processing"),
+    ("处理中…", "Processing…"),
+    ("外置插件目录", "Plugin directory"),
+    ("大小", "Size"),
+    ("失败", "Failed"),
+    ("失败项已重置，请选择输出目录", "Failed items reset, please choose an output folder"),
+    ("安装包已就绪", "Installer ready"),
+    ("完成", "Done"),
+    ("宽高比", "Aspect ratio"),
+    ("对比", "Compare"),
+    ("导出", "Export"),
+    ("导出单张 PNG", "Export single PNG"),
+    ("导出尺寸", "Export size"),
+    ("导出排版 JPG", "Export layout JPG"),
+    ("导出默认值", "Export defaults"),
+    ("尚未检测", "Not checked yet"),
+    ("就绪", "Ready"),
+    ("尺寸", "Dimensions"),
+    ("屏幕 DPI", "Screen DPI"),
+    ("工具切换", "Tool switching"),
+    ("已停用", "Disabled"),
+    ("已发现模型", "models found"),
+    ("已恢复新版本提醒", "Update reminders restored"),
+    ("已撤销一步", "One step undone"),
+    ("已是最新版本", "Up to date"),
+    ("已载入示例图片", "Sample image loaded"),
+    ("已释放模型会话与中间缓存（下次推理首张稍慢）", "Model sessions and caches released (first inference will be slower)"),
+    ("并行度", "Parallelism"),
+    ("应用旋转", "Apply rotation"),
+    ("应用裁剪", "Apply crop"),
+    ("底色", "Background"),
+    ("建议正脸、光线均匀、肩部放松；换底由内置 MODNet 人像模型在本地完成。", "Face the camera with even lighting and relaxed shoulders; background replacement runs locally via the built-in MODNet model."),
+    ("开始", "Start"),
+    ("引导：① 选择照片 → ② 换底色 / 调规格 → ③ 排版导出", "Steps: 1 pick a photo → 2 swap background / adjust spec → 3 lay out & export"),
+    ("引擎", "Engine"),
+    ("当前版本", "Current version"),
+    ("当前状态", "Current status"),
+    ("快捷键", "Shortcuts"),
+    ("快捷键与 Adobe Photoshop 保持一致。文本输入框聚焦时快捷键自动失效。", "Shortcuts match Adobe Photoshop; they pause while a text field is focused."),
+    ("快速预设", "Quick presets"),
+    ("忽略此版本", "Skip this version"),
+    ("恢复提醒", "Restore reminders"),
+    ("恢复默认参数", "Reset parameters"),
+    ("批量处理中，不能清空", "Cannot clear while batch is running"),
+    ("批量处理中，不能移除", "Cannot remove while batch is running"),
+    ("批量导入", "Batch import"),
+    ("批量导出", "Batch export"),
+    ("批量导出中…", "Batch exporting…"),
+    ("批量导出正在进行中，请稍候", "A batch export is already running, please wait"),
+    ("批量队列", "Batch queue"),
+    ("批量队列为空", "Batch queue is empty"),
+    ("把重复的事交给机器，把判断留给人。", "Let machines handle the repetitive; keep judgment for people."),
+    ("抠图", "Cutout"),
+    ("抠图完成，已按规格构图", "Cutout done, composed to spec"),
+    ("抠图模型", "Matting model"),
+    ("护照 · 签证", "Passport · Visa"),
+    ("拍摄", "Capture"),
+    ("拍摄依赖摄像头采集（原生版暂未提供），可先用本地照片。", "Capture needs a webcam (not yet available natively); use a local photo for now."),
+    ("拖入商品图，开始抠图", "Drop a product photo to start"),
+    ("拖动滑块调整构图；旋转校正经顺时针为正", "Drag sliders to compose; rotation is clockwise-positive"),
+    ("持有预览副本 / 预取槽（随使用自动回收）", "Holding preview copy / prefetch slot (auto-recycled)"),
+    ("指定额外目录后，点击「重新扫描」即可将外置 .onnx 模型加入清单。同名文件以主模型目录为准。", "Add an extra folder and hit Rescan to include external .onnx models. Same-name files prefer the main models directory."),
+    ("按显示器物理 DPI 把规格还原成屏幕上的实际毫米大小；屏幕放不下时等比缩小并标出比例。导出始终 300 DPI，不受此开关影响。", "Renders specs at physical DPI for true millimeter sizing; scales down to fit and shows the ratio. Export always uses 300 DPI regardless."),
+    ("换底后压掉发丝外的原背景残边", "Suppress leftover background fringe after recolor"),
+    ("排版", "Layout"),
+    ("排版相纸", "Photo paper"),
+    ("排队中", "Queued"),
+    ("推理引擎", "Inference engine"),
+    ("推理运行时", "Runtime"),
+    ("撤销栈深度", "Undo depth"),
+    ("撤销（Ctrl+Z）", "Undo (Ctrl+Z)"),
+    ("擦除画笔 · 抹掉残留", "Erase brush · remove leftovers"),
+    ("支持 JPG / PNG / WebP，照片仅在本地处理", "JPG / PNG / WebP supported; photos are processed locally"),
+    ("收起侧栏", "Collapse sidebar"),
+    ("教资 / 四六级", "Teacher cert / CET"),
+    ("数据存储", "Data storage"),
+    ("新功能", "New"),
+    ("新增 20 种证件规格与 7 种标准底色", "Added 20 ID specs and 7 official background colors"),
+    ("新增 Tauri 2 桌面端与 platform 适配层", "Added Tauri 2 desktop shell and platform layer"),
+    ("新增「证件照」页面：上传 → 抠图换底 → 规格构图出图 → 相纸排版导出", "New ID Photo page: upload → recolor → spec compose → paper layout export"),
+    ("新手引导", "Onboarding"),
+    ("旋转 / 裁剪接入撤销栈（深度 3，换图清空）", "Rotate / crop join the undo stack (depth 3, cleared on new image)"),
+    ("旋转校正", "Rotate correction"),
+    ("无 —— 目录为空或尚未扫描", "None — directory empty or not scanned"),
+    ("无法确定临时目录，下载中止", "Cannot determine temp directory, download aborted"),
+    ("无羽化", "No feather"),
+    ("智能抠图（自动）", "Smart matting (auto)"),
+    ("暂无任务，点击「添加」选择多张图", "No tasks yet — click Add to pick multiple images"),
+    ("暂无预览", "No preview"),
+    ("更新失败", "Update failed"),
+    ("更新日志", "Changelog"),
+    ("最小通道宽", "Min channel width"),
+    ("最近文件已清空", "Recent files cleared"),
+    ("未发现模型 · 将使用色键回退", "No models found · falling back to color key"),
+    ("未在 models/ 目录找到 modnet.onnx；证件照页将回退 SmartMatte 色键抠图。", "modnet.onnx not found in models/; the ID Photo page will fall back to SmartMatte color key."),
+    ("未就绪", "Not ready"),
+    ("未找到 models 目录，把 .onnx 模型放入后点重新扫描", "models directory not found — drop .onnx models in and rescan"),
+    ("未设置插件目录", "No plugin directory set"),
+    ("未配置", "Not configured"),
+    ("本地", "Local"),
+    ("本地推理", "Local inference"),
+    ("松石绿", "Turquoise"),
+    ("构图", "Compose"),
+    ("核心能力", "Core capabilities"),
+    ("格式", "Format"),
+    ("检查/下载失败，点击重试", "Check/download failed, click to retry"),
+    ("检查更新", "Check updates"),
+    ("检测失败，使用默认值 96", "Detection failed, using default 96"),
+    ("模型", "Model"),
+    ("模型与推理引擎", "Models & Engine"),
+    ("模型插件", "Model plugins"),
+    ("模型清单", "Model manifest"),
+    ("模型目录", "Models directory"),
+    ("欢迎使用壹鸣 · 拖入图片即可开始", "Welcome to Yiming · drop an image to begin"),
+    ("正在下载更新", "Downloading update"),
+    ("正在抠图…", "Matting…"),
+    ("正在检查…", "Checking…"),
+    ("正在检查更新", "Checking for updates"),
+    ("正在载入图片…", "Loading image…"),
+    ("正在连接更新服务器…", "Connecting to update server…"),
+    ("每 24 小时最多检查一次；忽略的版本不再自动提醒", "Checks at most once every 24 hours; skipped versions won't remind again"),
+    ("毫米制规格的输出像素随 DPI 缩放；像素制规格（如四六级 144×192）固定不受影响", "Millimeter specs scale output pixels with DPI; pixel specs (e.g. CET 144×192) stay fixed"),
+    ("没有可撤销的操作", "Nothing to undo"),
+    ("没有失败项可重试", "No failed items to retry"),
+    ("没有待处理的任务", "No pending tasks"),
+    ("流量", "Flow"),
+    ("添加", "Add"),
+    ("清空", "Clear"),
+    ("清空最近文件", "Clear recent files"),
+    ("渲染", "Render"),
+    ("点击或拖拽照片到这里", "Click or drop a photo here"),
+    ("点击选择，或把照片拖到这里", "Click to choose, or drop a photo here"),
+    ("版本", "Version"),
+    ("琥珀", "Amber"),
+    ("画笔", "Brush"),
+    ("白底", "White"),
+    ("目录不存在", "Directory missing"),
+    ("相纸", "Paper"),
+    ("真实尺寸", "Actual size"),
+    ("真实尺寸 1:1", "Actual size 1:1"),
+    ("真实尺寸（显示器 DPI）", "Actual size (screen DPI)"),
+    ("石墨", "Graphite"),
+    ("硬度", "Hardness"),
+    ("社保 / 驾驶证", "Social security / Driver license"),
+    ("移动画布 · 拖动平移（也可按住空格临时切换）", "Pan · drag to move (hold Space to toggle)"),
+    ("移除", "Remove"),
+    ("稍后", "Later"),
+    ("稍后安装", "Install later"),
+    ("空闲", "Idle"),
+    ("笔刷属性", "Brush properties"),
+    ("签证 / 档案", "Visa / Records"),
+    ("简历 / 入职 / 社保", "Resume / Onboarding / Social security"),
+    ("紫罗兰", "Violet"),
+    ("经典算法为纯色 / 白底商品图设计，毫秒级；神经网络模型经 ONNX Runtime 本地推理。", "The classic algorithm targets solid/white-background product shots at millisecond speed; neural models run locally via ONNX Runtime."),
+    ("结果", "Result"),
+    ("绯红", "Crimson"),
+    ("编辑", "Edit"),
+    ("缩放", "Zoom"),
+    ("美国签证", "US Visa"),
+    ("考公 · 事业编", "Civil service · Public institution"),
+    ("耗时", "Elapsed"),
+    ("背景", "Background"),
+    ("背景取样", "Background sampling"),
+    ("自动四角", "Auto corners"),
+    ("自动重算", "Auto recompute"),
+    ("自动重算（改参数即时生效）", "Auto recompute (params apply instantly)"),
+    ("自定义", "Custom"),
+    ("自定义底色", "Custom background"),
+    ("自定义颜色", "Custom color"),
+    ("自由", "Free"),
+    ("色键抠图在 CPU（纯 Rust + rayon 并行）；ONNX 模型推理由 ONNX Runtime 执行，Windows 下优先 DirectML GPU 执行提供程序，缺失时自动回退 CPU。", "Color-key matting runs on CPU (pure Rust + rayon); ONNX models run via ONNX Runtime with DirectML GPU when available, falling back to CPU."),
+    ("莓红", "Berry"),
+    ("蒙版参数", "Mask parameters"),
+    ("蒙版参数已恢复默认", "Mask parameters reset"),
+    ("蒙版已重置", "Mask reset"),
+    ("蒙版收缩 / 扩张", "Mask shrink / grow"),
+    ("蒙版计算按像素流式处理，峰值内存约为图像 RGBA 的 3~4 倍。超大图请先缩小。", "Masking streams pixels with peak memory around 3–4x the RGBA image. Downscale very large images first."),
+    ("虽无鸣 . 鸣必惊人", "Yiming . striking"),
+    ("补孔", "Fill holes"),
+    ("裁剪", "Crop"),
+    ("裁剪与旋转", "Crop & rotate"),
+    ("裁剪工具新增旋转校正与自由⇄锁定宽高比", "Crop tool adds rotation correction and free⇄locked aspect"),
+    ("裁剪框无效", "Invalid crop box"),
+    ("裁剪线", "Cut line"),
+    ("规格", "Spec"),
+    ("视图", "View"),
+    ("计算后端", "Compute backend"),
+    ("设置分类", "Categories"),
+    ("证件照", "ID Photo"),
+    ("证件照参数已重置", "ID photo parameters reset"),
+    ("证件规格", "ID specs"),
+    ("请先导入图片", "Import an image first"),
+    ("请先批量导入照片", "Batch-import photos first"),
+    ("读取线程异常退出", "Decode thread exited abnormally"),
+    ("调整参数后即时重新推理；关闭后需手动切换模型触发。", "Re-runs inference as parameters change; when off, switch models to trigger."),
+    ("轮廓保护", "Contour protection"),
+    ("载入", "Load"),
+    ("载入示例", "Load sample"),
+    ("输出", "Output"),
+    ("输出 DPI", "Output DPI"),
+    ("输出像素", "Output pixels"),
+    ("边缘收缩", "Edge shrink"),
+    ("边缘羽化", "Edge feather"),
+    ("边缘连通", "Edge connectivity"),
+    ("边缘阈值", "Edge threshold"),
+    ("还没有可导出的成品", "Nothing to export yet"),
+    ("还没有可导出的结果", "No result to export yet"),
+    ("远程后端", "Remote backend"),
+    ("选择图片", "Choose image"),
+    ("选择照片", "Choose photo"),
+    ("选择目录…", "Choose folder…"),
+    ("选择非原始尺寸时，图片会等比缩放并居中放置于方画布。", "Non-original sizes scale the image proportionally and center it on the canvas."),
+    ("透明底", "Transparent"),
+    ("配置持久化改为系统配置目录下的 config.json", "Config persistence moved to config.json in the system config directory"),
+    ("释放内存缓存", "Release memory cache"),
+    ("重启并安装", "Restart & install"),
+    ("重新加载内容", "Reload content"),
+    ("重新扫描", "Rescan"),
+    ("重新拍摄", "Re-capture"),
+    ("重新选图", "Re-choose image"),
+    ("重构", "Refactor"),
+    ("重置参数", "Reset parameters"),
+    ("重置蒙版", "Reset mask"),
+    ("重试下载", "Retry download"),
+    ("重试失败项", "Retry failed items"),
+    ("重试检查", "Retry check"),
+    ("队列为空", "Queue is empty"),
+    ("队列为空：请先「批量导入」照片", "Queue empty: batch-import photos first"),
+    ("队列状态", "Queue status"),
+    ("隐私与数据", "Privacy & data"),
+    ("青碧", "Teal"),
+    ("预取线程异常退出", "Prefetch thread exited abnormally"),
+    ("预览", "Preview"),
+    ("首页重做为「证件照工作台」落地页：7 种规格快速预设、当前状态卡、照片入口", "Home rebuilt as an ID-photo landing page: 7 quick presets, status card and photo entry"),
+    ("黑底", "Black"),
+    ("默认蓝", "Default blue"),
+    ("PNG / JPG / WEBP · 本地推理 · 隐私安全", "PNG / JPG / WEBP · local inference · privacy safe"),
+    ("PNG 保留透明通道，JPG 体积最小但会强制白底。", "PNG keeps transparency; JPG is smallest but forces a white background."),
+    ("POST multipart/form-data，字段名 file，返回 PNG 图片流。仅「RMBG-2.0」模型选项会用到。", "POST multipart/form-data with field name file, returns a PNG stream. Only used by the RMBG-2.0 model option."),
+    ("SmartMatte v2 色键", "SmartMatte v2 color key"),
+    ("YuNet 权重在原项目中已判定不可用，原生版同样不启用。", "YuNet weights were deemed unusable in the original project and stay disabled here."),
+    ("ONNX Runtime（load-dynamic）：Windows 优先 DirectML GPU 执行，未安装运行库时回退 CPU。", "ONNX Runtime (load-dynamic): prefers DirectML GPU on Windows, falls back to CPU when the runtime is missing."),
+    ("单文件 index.html（3342 行）拆为模块化工程", "Single-file index.html (3342 lines) split into a modular project"),
+    ("抠图内核 SmartMatte v2 用 Rust 重写，算法与 JS 版逐行对齐", "SmartMatte v2 core rewritten in Rust, aligned line-by-line with the JS version"),
+    ("iced 原生复刻版：移除 Tauri / WebView / 前端框架，UI 改为 iced 0.14（Elm 架构 + wgpu）", "Native iced rebuild: Tauri / WebView / frontend frameworks removed, UI is now iced 0.14 (Elm architecture + wgpu)"),
+    ("models/ 目录不存在，点击「重新扫描」或把 .onnx 放入该目录", "models/ directory missing — click Rescan or drop .onnx files there"),
+    ("models/ 目录不存在：在工作目录创建 models/ 并放入 .onnx 后点击「重新扫描」", "models/ directory missing: create models/ in the working directory, drop .onnx files and rescan"),
+    ("人像发丝级模型（models/modnet.onnx）已就绪，证件照页自动优先使用。", "Hair-level portrait model (models/modnet.onnx) ready; the ID Photo page prefers it automatically."),
+    ("nn:<文件名>", "nn:<file>"),
+    ("【图形-文言】_自研内置版", "[Graph-Wenyan] Built-in"),
+    ("一寸 · 蓝底", "1-inch · Blue"),
+    ("二寸 · 白底", "2-inch · White"),
+    ("35×45mm · 机器校验蓝底", "35×45mm · machine-checked blue"),
+    ("35×45mm · 签证蓝底", "35×45mm · visa blue"),
+    ("一寸 25×35mm", "1-inch 25×35mm"),
+    ("二寸 35×49mm", "2-inch 35×49mm"),
+    ("小二寸 33×48mm", "Small 2-inch 33×48mm"),
+    ("六寸 / 四六级", "6-inch / CET"),
+    ("六寸 102×152mm", "6-inch 102×152mm"),
+    ("大六寸 120×160mm", "Large 6-inch 120×160mm"),
+    ("小二寸 35×45mm", "Small 2-inch 35×45mm"),
+    ("四六级 144×192", "CET 144×192"),
+    ("社保 26×32", "Social security 26×32"),
+    ("驾驶证 22×32", "Driver license 22×32"),
+    ("美国签证 51×51", "US Visa 51×51"),
+    ("医保 25×35", "Medical 25×35"),
+    ("自定义取样", "Custom sampling"),
+    ("壹鸣是一套离线运行的图像工具：抠图、换底、证件照排版全部在本机完成，图片不上传服务器。界面与快捷键刻意贴近主流图像软件，减少学习成本。", "Yiming is an offline image toolkit: matting, background swap and ID layout all run on-device — images never leave it. The UI and shortcuts deliberately mirror mainstream image software."),
+    ("壹鸣 是一个**本地优先**的商品图与人像处理工作台：所有推理都在本机完成，图片不上传、不依赖云端服务。", "Yiming is a local-first workbench for product and portrait photos: all inference runs on-device, no uploads, no cloud."),
+    ("推理位置", "Inference location"),
+    ("浏览器本地", "Browser-local"),
+    ("硬件线程", "Hardware threads"),
+    ("最大处理分辨率", "Max resolution"),
+    ("2×2英寸 600×600px", "2×2 inch 600×600px"),
+    ("上传一张照片，一键生成透明底图片，证件照智能一键排版，设计师的效率神器。赶快试试吧！", "Upload a photo for one-click transparent cutouts and smart ID photo layout — a designer's productivity tool. Try it now!"),
+    ("抠图线程异常退出", "Matting thread exited abnormally"),
+    ("导出线程异常退出", "Export thread exited abnormally"),
+    ("导入", "Import"),
+    ("计算中", "Computing"),
+    ("已取消", "Cancelled"),
+    /* ── 参数化模板（配合 trf 顺序填参） ── */
+    ("当前版本 v{}", "Current version v{}"),
+    ("新版本 v{}", "New version v{}"),
+    ("v{} 下载完成，点击「重启并安装」将启动安装器并关闭本程序。", "v{} download complete. Click \"Restart & Install\" to launch the installer and close this app."),
+    ("神经网络 · {}", "Neural network · {}"),
+    ("内容暂缺", "Content coming soon"),
+    ("作者：{}", "Author: {}"),
+    ("自定义 {}", "Custom {}"),
+    ("{} 抠图失败：{}", "{} matting failed: {}"),
+    ("已导入 {} 张照片，开始逐张处理", "Imported {} photos, processing one by one"),
+    ("打开失败：{}", "Failed to open: {}"),
+    ("抠图失败：{}", "Matting failed: {}"),
+    ("导出失败：{}", "Export failed: {}"),
+    ("「{}」导出失败：{}", "Export failed for \"{}\": {}"),
+    ("批量导出完成：{} 张 → {}", "Batch export finished: {} files → {}"),
+    ("批量导出结束：成功 {} · 失败 {} → {}", "Batch export done: {} succeeded, {} failed → {}"),
+    ("已导出 {}", "Exported: {}"),
+    ("队列状态：{} 完成 · {} 失败 · {} 排队中（共 {} 张）", "Queue: {} done, {} failed, {} pending ({} in total)"),
+    ("写入失败：{}", "Failed to write: {}"),
+    ("{} 项", "{} items"),
+    ("真实尺寸（屏显 {}%）", "True size (screen {}%)"),
+    ("相纸真实尺寸 1:1（{}×{}mm）", "Paper true size 1:1 ({}×{}mm)"),
+    ("后端地址已保存：{}", "Backend URL saved: {}"),
+    ("插件目录：{}", "Plugin folder: {}"),
+    ("模型扫描完成：发现 {} 个模型", "Model scan finished: {} models found"),
+    ("目录 {} · 发现 {} 个模型", "Folder {} · {} models found"),
+    ("{} MB · 输入 {}px", "{} MB · input {}px"),
+    ("系统 DPI {}（缩放 {}%）", "System DPI {} (scale {}%)"),
+    ("启动时自动扫描 {}，发现的 .onnx 可在证件照 / 引擎面板直接选用", "Auto-scanned {} at startup; found .onnx models can be selected in ID Photo / Engine panels"),
+    ("{} 张", "{} files"),
+    ("新版本 v{} 可用，点击查看", "New version v{} available, click to view"),
+    ("下载中 {}%", "Downloading {}%"),
+    ("下载中 {}", "Downloading {}"),
+    ("已忽略 v{}", "Ignored v{}"),
+    ("（跳过重复 {} 张）", " ({} duplicates skipped)"),
+    ("已加入 {} 张到批量队列{}", "Added {} files to batch queue{}"),
+    ("已载入 {}（{}×{}）", "Loaded {} ({}×{})"),
+    ("合成失败：{}", "Compositing failed: {}"),
+    ("发现 {} 个神经网络模型", "Found {} neural network models"),
+    ("编码失败：{}", "Encoding failed: {}"),
+    ("已旋转 {}°", "Rotated {}°"),
+    ("批量完成 {} 张", "Batch finished: {} files"),
+    ("已取样 {}", "Sampled {}"),
+    ("已裁剪为 {}×{}，正在重新抠图...", "Cropped to {}×{}, re-matting..."),
+    ("羽化 {}px", "Feather {}px"),
+    ("models/ 未发现 .onnx（{}）", "No .onnx found in models/ ({})"),
+    ("开始处理（{}）", "Start processing ({})"),
+    ("已载入 {} · {}×{}", "Loaded {} · {}×{}"),
+    ("CPU {} 线程", "CPU {} threads"),
+    ("内存 ≈{} GB 可用", "Memory ≈{} GB available"),
+    ("已是最新版本（v{}）", "Already up to date (v{})"),
+    ("发现新版本 v{}（你已选择忽略此版本）", "New version v{} found (this version was ignored)"),
+    ("发现新版本 v{}", "New version v{} found"),
+    ("检查更新失败：{}", "Update check failed: {}"),
+    ("下载失败：{}", "Download failed: {}"),
+    ("已忽略 v{}，之后可在「关于」页恢复提醒", "Ignored v{} — you can restore reminders on the About page"),
+    ("创建会话构建器失败：{}\n若为 onnxruntime.dll 加载失败，{}", "Failed to create session builder: {}\nIf onnxruntime.dll failed to load, {}"),
+    ("设置线程数失败：{}", "Failed to set thread count: {}"),
+    ("加载模型失败（{}）：{}\n文件损坏或不是受支持的 ONNX 导出版本时会出现此错误", "Failed to load model ({}): {}\nThis can happen if the file is corrupt or not a supported ONNX export"),
+    ("输出形状非法：{}", "Invalid output shape: {}"),
+    ("构造输入张量失败：{}", "Failed to build input tensor: {}"),
+    ("推理失败：{}", "Inference failed: {}"),
+    ("图片尺寸非法：{}×{}", "Invalid image size: {}×{}"),
+    ("不支持的模型格式：{}（仅支持 .onnx）", "Unsupported model format: {} (only .onnx supported)"),
+    ("后台任务异常：{}", "Background task error: {}"),
+    ("非法版本号：{}", "Invalid version number: {}"),
+    ("连接失败：{}", "Connection failed: {}"),
+    ("无法创建临时文件：{}", "Failed to create temp file: {}"),
+    ("网络中断：{}", "Network interrupted: {}"),
+    ("无法启动安装器：{}", "Failed to launch installer: {}"),
+    ("无法打开浏览器：{}", "Failed to open browser: {}"),
+    ("一键更新", "Update Now"),
+    ("已应用预设", "Preset applied"),
+
+    ("抠图结果", "Result"),
+    ("{} · {} · {}（去证件照页即可制作）", "{} · {} · {} (go to ID Photo to create)"),
+    ("{} · {} · 输出 {}x{}px @{}DPI", "{} · {} · output {}x{}px @{}DPI"),
+    ("相纸 {}×{}mm（屏显 {}%）", "Paper {}×{}mm (screen {}%)"),
+    ("模型不存在或已移出 models 目录：{}（点「重新扫描」刷新清单）", "Model missing or removed from models/: {} (click \"Rescan\" to refresh)"),
+    ("models 目录未发现 .onnx 模型（{}）", "No .onnx models found in models/ ({})"),
+    ("批量结束：成功 {} · 失败 {}（可点「重试失败项」）", "Batch done: {} succeeded, {} failed (use \"Retry failed\")"),
+    ("重新扫描模型（{}）", "Rescan models ({})"),
+    ("可用并行度 {}（由 std::thread::available_parallelism 探测）", "Available parallelism {} (via std::thread::available_parallelism)"),
+    ("色键抠图在 CPU（纯 Rust + rayon 并行）；ONNX 模型推理由 ONNX Runtime 执行，Windows 下优先 DirectML GPU 执行提供程序，缺失时自动回退 CPU。", "Chroma-key matting runs on CPU (pure Rust + rayon); ONNX models run via ONNX Runtime, preferring the DirectML GPU provider on Windows and falling back to CPU when the runtime DLL is missing."),
+
+    ("纯色", "Solid"),
+    ("上下渐变", "Vertical gradient"),
+    ("中心渐变", "Center gradient"),
+    ("原背景", "Original background"),
+    ("纯色平铺 · 常规证件照底", "Solid fill · standard ID background"),
+    ("顶端底色向下过渡到白 · 常见「渐变蓝」", "Background fades to white toward the bottom · the common \"gradient blue\""),
+    ("中心白向外过渡到底色 · 影楼常用", "White center fading outward to the background · studio style"),
+    ("保留透明通道，不铺底色", "Keeps the alpha channel; no background fill"),
+    ("保留原图背景，不做换底", "Keeps the original background; no replacement"),
+    ("排版与单张导出的打印分辨率；仅影响毫米制规格，像素制规格尺寸固定不变。", "Print resolution for sheet and single-file export; only affects millimeter-based specs — pixel-based specs keep a fixed size."),
+    ("按显示器物理 DPI 把规格还原成屏幕上的实际毫米大小；屏幕放不下时等比缩小并标出比例。导出分辨率由「输出 DPI」决定。", "Restores the real-world millimeter size on screen using the monitor's physical DPI; scales down proportionally (with a ratio badge) when it doesn't fit. Export resolution is set by Output DPI."),
+
+    ("主题系统：亮色 / 深色 / 跟随系统，支持自定义强调色并持久化", "Theme system: light / dark / follow system, with a persisted custom accent color"),
+    ("多语言国际化：中文 / English 一键切换，时区感知的本地化日期", "Internationalization: one-click Chinese / English switching, timezone-aware localized dates"),
+    ("通知系统：系统通知 + 应用内消息中心（未读徽标、免打扰时段）", "Notifications: system notifications + in-app message center (unread badge, do-not-disturb hours)"),
+    ("批量队列增强：失败容忍、输出目录选择、并行流水线、失败项重试", "Batch queue upgrades: failure tolerance, output folder selection, parallel pipeline, retry failed items"),
+    ("证件照：恢复渲染模式与输出 DPI 控件，导航与全界面英文翻译补齐", "ID Photo: restored render-mode and output-DPI controls; full English translation for navigation and all panels"),
+
+    ("上一步", "Previous"),
+    ("下一步", "Next"),
+    ("跳过", "Skip"),
+    ("不再显示", "Don't show again"),
+    ("上传照片", "Upload a photo"),
+    ("开始制作", "Start creating"),
+    ("{}/{} 步", "Step {}/{}"),
+    ("点「开始」卡的虚线框或直接拖入照片，支持 JPG / PNG / WebP，全程本地处理。", "Click the dashed box in the Start card or drop a photo in; JPG / PNG / WebP supported, all processing stays local."),
+    ("预设一键套用常用证件规格与底色，也可进入证件照页后自行调整。", "One-click presets apply common ID specs and background colors; fine-tune later on the ID Photo page."),
+    ("汇总当前规格、输出像素、排版相纸与推理引擎，确认参数再动手。", "Summarizes the current spec, output pixels, layout paper and inference engine — confirm before you start."),
+    ("点「去制作证件照」进入证件照页：换底 → 调构图 → 排版导出。", "Click Go to ID Photo to swap backgrounds, adjust composition and export the print layout."),
+
+    ("请作者喝杯咖啡", "Buy the Author a Coffee"),
+    ("打赏完全自愿 · 壹鸣永久免费", "Tips are voluntary · WonderLand stays free forever"),
+    ("壹鸣完全免费、无广告，所有处理都在本机完成。如果它帮到了你，欢迎请作者喝杯咖啡——每一份支持都是持续打磨的动力。", "WonderLand is free, ad-free, and fully local. If it helps you, buying the author a coffee keeps the polish coming."),
+    ("微信收款", "WeChat Pay"),
+    ("支付宝收款", "Alipay"),
+    ("扫码时输入 {} 即可，金额不限，随心就好。", "Enter {} when you scan — any amount is appreciated."),
+    ("扫码时可输入 {}，金额不限，随心就好。", "You can enter {} when scanning — any amount is appreciated."),
+    ("打赏不升级、不解锁、不影响任何功能——你的每一杯咖啡，都会变成下一个新功能。", "Tips never unlock features or change behavior — every coffee becomes the next improvement."),
+    ("其他支持渠道", "Other ways to support"),
+    ("免费", "Free"),
+    ("无广告", "No ads"),
+    ("本地隐私", "Local & private"),
+    ("壹鸣的所有功能完全免费、没有广告，图片处理全程留在你的电脑上，不上传任何数据。如果它帮到了你，欢迎支持持续开发——让每一个新功能都稳定到来。", "Everything in WonderLand is free, ad-free, and stays on your machine — no uploads, ever. If it helps you, consider supporting ongoing development so every new feature ships reliably."),
+    ("0 元的 Star 也是很好的支持。", "A free Star is a great way to support us, too."),
+    ("去点 Star", "Give a Star"),
+];
+
+fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {
+    static ZH_MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    static EN_MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    match lang {
+        Lang::Zh => ZH_MAP.get_or_init(|| ZH.iter().copied().collect()),
+        Lang::En => EN_MAP.get_or_init(|| EN.iter().copied().collect()),
+    }
+}
+
+/// 翻译：当前语言 → 中文回退 → 键名原样。
+/// 返回 &'static str：中/英表均为静态字符串字面量，回退即键本身，
+/// 调用点可直接用于 &str 形参，需要 String 时自行 `.to_string()`。
+pub fn tr(key: &'static str) -> &'static str {
+    let cur = lang();
+    if let Some(v) = table(cur).get(key) {
+        return v;
+    }
+    if let Some(v) = table(Lang::Zh).get(key) {
+        return v;
+    }
+    key
+}
+
+/// 翻译并填参：模板中每个 "{}" 依序被 args 替换。
+/// 仅支持 "{}" 占位；需要精度 / Debug 格式化时，先在调用点 format! 成字符串再传入。
+pub fn trf(key: &'static str, args: &[&str]) -> String {
+    let mut out = tr(key).to_string();
+    for a in args {
+        match out.find("{}") {
+            Some(p) => out.replace_range(p..p + 2, a),
+            None => break,
+        }
+    }
+    out
+}
+
+/* ═════════════════ 时区与本地化日期 ═════════════════ */
+
+/// 本地时区相对 UTC 的偏移秒数（东八区 = +28800）
+#[cfg(windows)]
+pub fn tz_offset_seconds() -> i32 {
+    use windows::Win32::System::Time::GetTimeZoneInformation;
+    use windows::Win32::System::Time::TIME_ZONE_INFORMATION;
+    // SAFETY：无副作用的标准系统调用
+    unsafe {
+        let mut tzi = TIME_ZONE_INFORMATION::default();
+        GetTimeZoneInformation(&mut tzi);
+        // Bias：UTC = local + Bias（分钟）；东八区 Bias = -480
+        -tzi.Bias * 60
+    }
+}
+
+#[cfg(not(windows))]
+pub fn tz_offset_seconds() -> i32 {
+    0
+}
+
+/// UTC 毫秒时间戳 → 本地 (年, 月, 日, 时, 分)
+fn civil_local(ts_ms: u64) -> (i64, u32, u32, u32, u32) {
+    let secs = (ts_ms / 1000) as i64 + (tz_offset_seconds() as i64);
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let (h, mi) = ((rem / 3600) as u32, ((rem % 3600) / 60) as u32);
+    // Howard Hinnant 的 civil_from_days 算法
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d, h, mi)
+}
+
+/// 本地化日期时间（zh：`2026-10-25 09:28`；en：`Oct 25, 2026 9:28 AM`）
+pub fn fmt_datetime(ts_ms: u64) -> String {
+    let (y, m, d, h, mi) = civil_local(ts_ms);
+    match lang() {
+        Lang::Zh => format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}"),
+        Lang::En => {
+            const MON: [&str; 12] = [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ];
+            let (h12, am) = if h == 0 {
+                (12, "AM")
+            } else if h < 12 {
+                (h, "AM")
+            } else if h == 12 {
+                (12, "PM")
+            } else {
+                (h - 12, "PM")
+            };
+            format!("{} {}, {} {}:{:02} {}", MON[(m - 1) as usize], d, y, h12, mi, am)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tr_fallback_chain() {
+        set_lang(Lang::Zh);
+        assert_eq!(tr("nav.work"), "抠图工作台");
+        assert_eq!(tr("nonexistent.key"), "nonexistent.key");
+        set_lang(Lang::En);
+        assert_eq!(tr("nav.work"), "Matting Studio");
+        set_lang(Lang::Zh);
+    }
+
+    #[test]
+    fn datetime_now_roundtrip() {
+        // 用当前时间验证渲染管线（避免硬编码时间戳受时区影响）
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let (y, ..) = civil_local(now);
+        set_lang(Lang::Zh);
+        let s = fmt_datetime(now);
+        assert!(s.contains(&format!("{y:04}")), "zh got {s}");
+        set_lang(Lang::En);
+        let s = fmt_datetime(now);
+        assert!(s.contains(&format!("{y}")), "en got {s}");
+        set_lang(Lang::Zh);
+    }
+}

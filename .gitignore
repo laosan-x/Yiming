@@ -1,0 +1,15 @@
+# ── 构建产物 ──
+target/
+dist/
+
+# ── 第三方运行时（README 提供下载指引，不入库）──
+nsis-3.10/
+ort-libs/
+models/*.onnx
+
+# ── 临时 / 个人文件 ──
+icon_debug.log
+missing_zh.json
+zh_strings.json
+.workbuddy/
+*.log

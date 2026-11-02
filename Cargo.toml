@@ -1,0 +1,71 @@
+[package]
+name = "cocole-iced"
+version = "0.4.0"
+edition = "2021"
+description = "壹鸣 · 商品抠图工作台 —— iced 原生复刻版（无 WebView / 无 Electron）"
+license = "MIT"
+
+[dependencies]
+# ── UI：iced（Elm 架构 + wgpu 渲染，纯 Rust，无 WebView） ──
+iced = { version = "0.14", features = ["canvas", "image", "svg", "tokio", "advanced", "markdown"] }
+
+# ── 图像：解码 / 编码 / 缩放 / 旋转 ──
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+
+# ── 原生文件对话框（Windows: Win32 / macOS: AppKit / Linux: GTK|XDG） ──
+rfd = { version = "0.15", features = ["tokio"] }
+
+# ── 异步运行时：mask 计算放后台线程，避免阻塞 UI ──
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# ── 配置持久化（JSON，写入系统配置目录） ──
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+
+# ── 错误处理 ─
+thiserror = "2"
+
+# ── 自更新：HTTP 客户端（阻塞式，后台线程调用）+ 安装包 SHA-256 校验 ──
+ureq = "2"
+sha2 = "0.10"
+
+#  Windows API（用于获取系统 DPI） ──
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Time",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_Graphics_Dwm",
+] }
+
+# ── ONNX Runtime（本地神经网络抠图：MODNet / U²-NetP / BiRefNet / 用户插件） ──
+# load-dynamic：编译期不链接，运行时从 ort-libs/ 加载 DLL —— 避免 ort-sys 去网络上下载二进制
+half = "2"
+notify-rust = "4"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+  "std",
+  "ndarray",
+  "load-dynamic",
+  "copy-dylibs",
+  # DirectML EP 绑定：load-dynamic 下仅解锁 Rust 侧 API，运行时能力仍取决于
+  # ORT_DYLIB_PATH 指向的 DLL 是否为 GPU 构建；CPU 版 DLL 注册失败会自动回退。
+  "directml",
+  # f16 张量支持：部分模型（如 BEN2 系列）输出/输入为 half，需提取后转 f32
+  "half",
+] }
+
+[build-dependencies]
+# Windows EXE 图标嵌入
+winres = "0.1"
+# 编译时自动生成版本信息（Git 提交、构建时间等）
+built = { version = "0.7", features = ["git2", "chrono"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+# 静态链接 C 运行时库，避免目标电脑需要安装 VC++ Redistributable
+# 注：rustflags 已移至 .cargo/config.toml
