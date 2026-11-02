@@ -266,11 +266,18 @@ src/
 | 项目 | 许可证 | 用途 |
 |---|---|---|
 | [Rust](https://www.rust-lang.org/) | MIT / Apache-2.0 | 开发语言 |
-| [iced](https://github.com/iced-rs/iced) | MIT | 原生 GUI 框架（Elm 架构，0.14） |
+| [iced](https://github.com/iced-rs/iced)（含 winit / wgpu） | MIT | 原生 GUI 框架（Elm 架构，0.14） |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | 推理引擎（DirectML GPU 加速，经 [ort](https://github.com/pykeio/ort) 绑定） |
 | [windows-rs](https://github.com/microsoft/windows-rs) | MIT / Apache-2.0 | Win32 API（注册表 / DWM / 时间） |
+| [image](https://github.com/image-rs/image) | MIT / Apache-2.0 | 图像解码 / 编码 / 缩放 |
+| [tokio](https://github.com/tokio-rs/tokio) | MIT | 异步运行时（任务通道 / 定时器） |
+| [serde / serde_json](https://github.com/serde-rs/serde) | MIT / Apache-2.0 | 序列化与配置持久化 |
+| [rfd](https://github.com/PolyMeilex/rfd) | MIT | 原生文件对话框 |
 | [notify-rust](https://github.com/hoodie/notify-rust) | MIT / Apache-2.0 | 系统通知 |
+| [Lucide](https://github.com/lucide-icons/lucide) | ISC | 界面图标（内联 SVG 字形） |
 | [NSIS](https://nsis.sourceforge.io/) | zlib | Windows 安装包制作 |
+
+> 📋 **完整许可清单**：全部 577 个第三方组件（含传递依赖）的许可证与来源见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)——均为宽松许可证（MIT × 425、Apache-2.0 × 72、MIT/Apache 双许可 × 3、Zlib × 18、Unicode-3.0 × 18、BSD 系 × 19、ISC × 4、其余复合许可若干），可放心集成。
 
 再次向所有上游作者与社区贡献者表示感谢——壹鸣只是站在这些巨人肩膀上的一层薄薄的应用。
 
