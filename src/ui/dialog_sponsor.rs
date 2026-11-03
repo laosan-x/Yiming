@@ -180,6 +180,22 @@ fn ghost_close_style(_t: &Theme, s: button::Status) -> button::Style {
     }
 }
 
+/// 组间细分隔线（hairline，宽撑满）
+fn divider() -> Element<'static, Message> {
+    container(Space::new().width(Length::Fill).height(Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .style(|_t| container::Style {
+            background: Some(Background::Color(LINE())),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// 小节标题（小号灰字，各分组统一）
+fn sec_title(label: &'static str) -> Element<'static, Message> {
+    text(tr(label)).size(FS_XS).color(TXT3()).into()
+}
+
 /// 打赏浮层：右缘停靠（标题栏下方）直接就位；浮层外点击关闭
 pub fn modal(app: &App) -> Element<'_, Message> {
     // 浮层宽：固定 360，窄窗钳制
@@ -345,11 +361,11 @@ pub fn modal(app: &App) -> Element<'_, Message> {
             .into()
         });
 
-    // 建议金额 chips + 自定义输入
-    let mut chips = row![].spacing(6).align_y(Alignment::Center);
+    // ── 支持金额组：档位 chips 一行 + 自定义输入独占一行（不再挤在同一行）──
+    let mut amount_row = row![].spacing(6).align_y(Alignment::Center);
     for v in PRESETS {
         let selected = app.sponsor_custom.is_empty() && (app.sponsor_amount - v).abs() < 0.001;
-        chips = chips.push(
+        amount_row = amount_row.push(
             button(
                 text(fmt_amount(*v))
                     .size(FS_SM)
@@ -360,13 +376,11 @@ pub fn modal(app: &App) -> Element<'_, Message> {
             .on_press(Message::Sponsor(SponsorMessage::Amount(*v))),
         );
     }
-    chips = chips.push(
-        text_input(tr("自定义"), &app.sponsor_custom)
-            .size(FS_SM)
-            .width(Length::Fixed(96.0))
-            .style(text_input_style)
-            .on_input(|s| Message::Sponsor(SponsorMessage::CustomInput(s))),
-    );
+    let custom_input = text_input(tr("自定义金额"), &app.sponsor_custom)
+        .size(FS_SM)
+        .width(Length::Fill)
+        .style(text_input_style)
+        .on_input(|s| Message::Sponsor(SponsorMessage::CustomInput(s)));
 
     // 金额提示：自定义优先，其次选中的档位（引导到渠道页输入）
     let custom = app.sponsor_custom.trim().parse::<f32>().ok();
@@ -387,18 +401,31 @@ pub fn modal(app: &App) -> Element<'_, Message> {
     .color(TXT3())
     .width(Length::Fill);
 
-    // 主体：固定区（价值三件套 → 文案 → Star）+ 可选区（渠道 / 里程碑）
-    let mut body = column![head, trio, copy].spacing(8).width(Length::Fill);
+    // 主体分组：价值区 → 0 元支持 → 支持金额 → 其他渠道 → 里程碑 → 脚注，
+    // 组间 hairline 分隔线 + 小节标题，节奏统一
+    let amount_sec = column![
+        sec_title("支持金额"),
+        amount_row,
+        custom_input,
+        hint,
+    ]
+    .spacing(8)
+    .width(Length::Fill);
+
+    let mut body = column![head, divider(), trio, copy, divider()]
+        .spacing(10)
+        .width(Length::Fill);
     if let Some(sec) = star_sec {
         body = body.push(sec);
     }
+    body = body.push(divider()).push(amount_sec);
     if let Some(sec) = links_section {
-        body = body.push(sec);
+        body = body.push(divider()).push(sec);
     }
     if let Some(sec) = goal_sec {
-        body = body.push(sec);
+        body = body.push(divider()).push(sec);
     }
-    let card = container(body.push(chips).push(hint).push(footnote))
+    let card = container(body.push(divider()).push(footnote))
         .width(Length::Fixed(card_w))
         .padding(pad_all(CARD_PAD))
         .style(card_style);
