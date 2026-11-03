@@ -224,7 +224,7 @@ fn scan_dir(dir: &PathBuf) -> Vec<NnModelInfo> {
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
-            eprintln!("[nn] 无法读取目录 {}：{e}", dir.display());
+            nn_log(&format!("无法读取目录 {}：{e}", dir.display()));
             return Vec::new();
         }
     };
@@ -458,6 +458,43 @@ fn fill_mask_row(
 
 /* ═════════════════ 会话管理 ═════════════════ */
 
+/// nn 诊断日志：stderr + 文件镜像。
+///
+/// release 安装包没有控制台，`eprintln!` 全部不可见——排查「分发包内
+/// 模型加载/推理失败」时拿不到任何现场。这里镜像写入
+/// `%LOCALAPPDATA%\yiming\cocole-iced\logs\nn.log`（>1MB 自动截断），
+/// 用户报障时让 TA 把这个文件发来即可定位。
+pub fn nn_log(msg: &str) {
+    eprintln!("[nn] {msg}");
+    static LOG_FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::path::PathBuf>>> =
+        std::sync::OnceLock::new();
+    let path = LOG_FILE.get_or_init(|| {
+        directories::ProjectDirs::from("cn", "yiming", "cocole-iced").map(|d| {
+            let dir = d.data_local_dir().join("logs");
+            let _ = std::fs::create_dir_all(&dir);
+            std::sync::Mutex::new(dir.join("nn.log"))
+        })
+    });
+    let Some(Ok(path)) = path.as_ref().map(|m| m.lock().map(|p| p.clone())) else {
+        return;
+    };
+    // 简单滚动：超过 1MB 直接重写，避免无限增长
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 1_048_576 {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{ts}] [nn] {msg}\n");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write as _;
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 /// 会话缓存：模型加载要 10~15 秒（490MB），同一模型不该反复加载。
 /// 会话条目：会话 + 最近使用时间（闲置超时自动释放显存/内存）
 struct SessionEntry {
@@ -481,7 +518,7 @@ pub fn session_generation() -> u64 {
 
 /// 立即释放全部模型会话（显存/内存归还系统；下次推理重新加载）
 pub fn sweep_all_sessions() {
-    eprintln!("[nn] 会话空闲，释放全部模型会话");
+    nn_log("会话空闲，释放全部模型会话");
     *SESSIONS.lock().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
@@ -499,7 +536,7 @@ fn sweep_idle_sessions(map: &mut HashMap<String, SessionEntry>, keep: Option<&st
         .map(|(id, _)| id.clone())
         .collect();
     for id in stale {
-        eprintln!("[nn] 会话闲置超 {IDLE_RELEASE_SECS}s，释放：{id}");
+        nn_log(&format!("会话闲置超 {IDLE_RELEASE_SECS}s，释放：{id}"));
         map.remove(&id);
     }
 }
@@ -619,7 +656,7 @@ fn get_session(info: &NnModelInfo) -> Result<(), String> {
     let mut guard = match SESSIONS.lock() {
         Ok(g) => g,
         Err(poisoned) => {
-            eprintln!("[nn] 会话锁已中毒，尝试恢复");
+            nn_log("会话锁已中毒，尝试恢复");
             poisoned.into_inner()
         }
     };
@@ -645,13 +682,13 @@ fn get_session(info: &NnModelInfo) -> Result<(), String> {
     }
 
     let use_dml = want_dml(info);
-    eprintln!(
-        "[nn] 加载「{}」{:.1}MB（输入 {}²）→ {}",
+    nn_log(&format!(
+        "加载「{}」{:.1}MB（输入 {}²）→ {}",
         info.name,
         info.size_mb,
         info.input_size,
         if use_dml { "GPU(DirectML)" } else { "CPU" }
-    );
+    ));
 
     let new_builder = || {
         // load-dynamic 模式下 DLL 在首次调用 ORT API（即这里）才真正加载；
@@ -668,12 +705,12 @@ fn get_session(info: &NnModelInfo) -> Result<(), String> {
     let mut builder = if use_dml {
         match new_builder()?.with_execution_providers([ort::ep::DirectML::default().build()]) {
             Ok(b) => {
-                eprintln!("[nn] DirectML EP 注册成功");
+                nn_log("DirectML EP 注册成功");
                 b
             }
             Err(e) => {
                 *DML_FAILED.lock().unwrap_or_else(|p| p.into_inner()) = true;
-                eprintln!("[nn] DirectML EP 注册失败，回退 CPU：{e}");
+                nn_log(&format!("DirectML EP 注册失败，回退 CPU：{e}"));
                 new_builder()?
             }
         }
@@ -848,18 +885,16 @@ fn run_with_fallback(
                 // OOM = 显存不足，可能是其它闲置会话占着显存。
                 // 全量释放腾出显存后重试一次 DML；仍失败则把该模型拉黑（固定 CPU），
                 // 但不置全局 DML_FAILED——其它模型继续用 GPU。
-                eprintln!("[nn] DirectML 显存不足（OOM），释放全部会话腾显存后重试");
+                nn_log("DirectML 显存不足（OOM），释放全部会话腾显存后重试");
                 release_all();
                 get_session(info)?;
                 match run_once(info, input, size) {
                     Ok(result) => {
-                        eprintln!("[nn] 清扫显存后 DirectML 重试成功");
+                        nn_log("清扫显存后 DirectML 重试成功");
                         return Ok(result);
                     }
                     Err(e2) => {
-                        eprintln!(
-                            "[nn] DirectML 重试仍 OOM，该模型本次运行内固定走 CPU：{e2}"
-                        );
+                        nn_log(&format!("DirectML 重试仍 OOM，该模型本次运行内固定走 CPU：{e2}"));
                         DML_OOM_MODELS
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
@@ -873,7 +908,7 @@ fn run_with_fallback(
             }
 
             // 非 OOM 的 DML 失败：能力性问题，全局降级 CPU（避免每次白试）
-            eprintln!("[nn] DirectML 推理失败，降级到 CPU 并重试");
+            nn_log("DirectML 推理失败，降级到 CPU 并重试");
             *DML_FAILED.lock().unwrap_or_else(|p| p.into_inner()) = true;
             get_session(info)?;
             run_once(info, input, size)
@@ -970,7 +1005,7 @@ pub fn matte(info: &NnModelInfo, rgba: &[u8], width: usize, height: usize) -> Re
     let mask = alpha_to_mask(&alpha, aw, ah, width, height);
     let t_post = t0.elapsed() - t_pre - t_infer;
     if diag {
-        eprintln!(
+        nn_log(&format!(
             "[diag] matte {}×{} → {}: 预处理 {:?} · 推理 {:?} · 蒙版上采样 {:?}",
             width,
             height,
@@ -978,7 +1013,7 @@ pub fn matte(info: &NnModelInfo, rgba: &[u8], width: usize, height: usize) -> Re
             t_pre,
             t_infer,
             t_post
-        );
+        ));
     }
     Ok(mask)
 }

@@ -36,11 +36,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$stage/icons", "$stage/ort-libs", "$stage/models" | Out-Null
           Copy-Item target/release/cocole-iced.exe $stage/
           Copy-Item icons/* $stage/icons/
-          # onnxruntime DLL (load-dynamic)
+          # onnxruntime DLL (load-dynamic); providers_shared is required by
+          # the DirectML EP registration attempt (see nn.rs ensure_dylib_path)
           $ver = "1.22.0"
           curl.exe -sL -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
           Expand-Archive ort.zip -DestinationPath ort-tmp -Force
           Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime.dll" $stage/ort-libs/
+          Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime_providers_shared.dll" $stage/ort-libs/
           # bundled models: only the light trio (~30 MB); heavy models
           # (BiRefNet 927MB / BEN2 212MB / isnet 170MB) users fetch via
           # models/download.ps1 and drop into models/ (app scans the dir)
