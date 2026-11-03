@@ -10,8 +10,9 @@
 //!   "platforms": {
 //!     "windows-x86_64": {
 //!       "url": "https://…/cocole-setup-0.4.0.exe",
+//!       "mirror_urls": ["https://<镜像前缀>/https://…/cocole-setup-0.4.0.exe", "…"],
 //!       "size": 15234567,
-//!       "sha256": "…（可选，填写则下载后强校验）"
+//!       "sha256": "…（强烈建议填写：多源下载的安全性完全依赖它）"
 //!     }
 //!   }
 //! }
@@ -22,6 +23,10 @@
 //! - 检查：`ureq` 阻塞请求，包在 `tokio::task::spawn_blocking` 里，不卡 UI。
 //! - 下载：后台线程流式落盘，进度经 tokio mpsc 回传给 `Task::stream` 驱动的
 //!   消息流（参考 IdMessage::RenderDone 的防乱序思路——事件按序到达，无需 seq）。
+//! - 多源下载：`url`（GitHub Releases 主源）→ `mirror_urls`（境内可达镜像）
+//!   逐个尝试，任一源下载完成且 SHA-256 校验通过即用；换源对 UI 无感知。
+//!   镜像源是第三方代理（gh-proxy 系），不可信问题由哈希强校验兜底——
+//!   内容不符一律丢弃换源，所以 `sha256` 在启用镜像后是必填级别的字段。
 //! - 清单地址可被 `COCOLE_UPDATE_URL` 环境变量覆盖（与 COCOLE_DEBUG_* 同族，
 //!   本地 mock 服务器联调用，见 tools/update-server-mock.mjs）。
 //! - 所有错误都转成中文 `String` 直接给 UI 展示，不向上抛 panic。
@@ -108,10 +113,16 @@ pub struct UpdateManifest {
 #[derive(Debug, Deserialize)]
 pub struct PlatformAsset {
     pub url: String,
+    /// 镜像源候选（按序尝试，位于主源之后）：
+    /// GitHub Releases 附件（objects.githubusercontent.com）在境内时好时坏，
+    /// 清单里提供 gh-proxy 系镜像 URL 兜底；安全性由 sha256 强校验保证
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
     /// 文件字节数（用于下载进度百分比；缺失时进度条显示为不定态）
     #[serde(default)]
     pub size: Option<u64>,
-    /// 安装包 SHA-256（十六进制小写；填写则下载完成后强校验）
+    /// 安装包 SHA-256（十六进制小写；填写则下载完成后强校验。
+    /// 启用 mirror_urls 后必须填写——镜像内容是否被篡改全靠它拦截）
     #[serde(default)]
     pub sha256: Option<String>,
 }
@@ -123,7 +134,10 @@ pub struct ReleaseInfo {
     pub notes: String,
     pub pub_date: String,
     pub mandatory: bool,
+    /// 主源（GitHub Releases 附件）
     pub download_url: String,
+    /// 镜像源候选（主源失败后按序尝试）
+    pub mirror_urls: Vec<String>,
     pub size: Option<u64>,
     pub sha256: Option<String>,
 }
@@ -254,6 +268,7 @@ fn check_blocking(url: &str) -> Result<CheckOutcome, UpdaterError> {
         pub_date: manifest.pub_date,
         mandatory: manifest.mandatory,
         download_url: asset.url.clone(),
+        mirror_urls: asset.mirror_urls.clone(),
         size: asset.size,
         sha256: asset.sha256.clone(),
     })))
@@ -279,6 +294,8 @@ pub fn installer_dest(version: &str) -> Option<PathBuf> {
 
 /// 构造下载任务：后台线程流式下载，进度事件经消息流逐条回传 UI。
 ///
+/// 候选源 = 主源（GitHub Releases）+ `mirror_urls` 镜像，逐个尝试，
+/// 任一源下载完成且 SHA-256 校验通过即成功；换源对 UI 无感知。
 /// `cancel` 置位后线程尽快退出并清理半成品文件。
 pub fn download_task(
     info: &ReleaseInfo,
@@ -288,10 +305,11 @@ pub fn download_task(
     let info = info.clone();
     Task::stream(iced::stream::channel(8, async move |mut out| {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DownloadEvent>();
-        let url = info.download_url.clone();
+        let mut urls = vec![info.download_url.clone()];
+        urls.extend(info.mirror_urls.iter().cloned());
         let sha = info.sha256.clone();
         let handle = std::thread::spawn(move || {
-            download_blocking(&url, &dest, sha.as_deref(), &cancel, &tx)
+            download_blocking(&urls, &dest, sha.as_deref(), &cancel, &tx)
         });
         // 线程侧每发一条事件这里转发一条；线程结束（tx drop）后循环自然退出
         while let Some(ev) = rx.recv().await {
@@ -302,28 +320,75 @@ pub fn download_task(
     }))
 }
 
-/// 阻塞式流式下载（在独立线程跑）：
-/// ureq 拉流 → 64KB 块落盘 → 每 ~256KB / 每 100ms 回报一次进度 →
-/// 完成后 SHA-256 校验（清单提供时）→ 发 Done；任何一步失败发 Failed。
+/// 单源下载结果（内部枚举，不出模块）
+enum OneOutcome {
+    /// 下载完成，返回十六进制 SHA-256 摘要
+    Success(String),
+    /// 用户取消（半成品已清理）
+    Cancelled,
+    /// 失败（含原因；半成品由调用方清理）
+    Error(String),
+}
+
+/// 阻塞式多源下载（在独立线程跑）：
+/// 逐个候选源尝试（主源 → 镜像源），单源网络失败或哈希不匹配自动换
+/// 下一源；全部源耗尽才向 UI 报失败。
+/// SHA-256 强校验（清单提供摘要时）在每源下载完成后执行——镜像源是
+/// 第三方代理，内容被篡改或缓存错版本时在此拦截丢弃换源。
 fn download_blocking(
-    url: &str,
+    urls: &[String],
     dest: &Path,
     sha256: Option<&str>,
     cancel: &AtomicBool,
     tx: &tokio::sync::mpsc::UnboundedSender<DownloadEvent>,
 ) {
+    let mut last_err: Option<String> = None;
+    for url in urls {
+        match download_one(url, dest, cancel, tx) {
+            OneOutcome::Success(hash) => {
+                if let Some(expect) = sha256 {
+                    if !hash.eq_ignore_ascii_case(expect) {
+                        let _ = std::fs::remove_file(dest);
+                        last_err = Some(UpdaterError::HashMismatch.to_string());
+                        continue; // 换下一源
+                    }
+                }
+                let _ = tx.send(DownloadEvent::Done { path: dest.to_path_buf() });
+                return;
+            }
+            OneOutcome::Cancelled => return,
+            OneOutcome::Error(e) => {
+                let _ = std::fs::remove_file(dest);
+                last_err = Some(e);
+                // 还有候选源时静默换源（进度条会在下一源开头归零）
+            }
+        }
+    }
+    let _ = tx.send(DownloadEvent::Failed(last_err.unwrap_or_else(|| {
+        UpdaterError::Network("无可用下载源".into()).to_string()
+    })));
+}
+
+/// 下载单个 URL：流式落盘 + 计算摘要，64KB 块读写，
+/// 每 ~256KB / 每 100ms 回报一次进度。不做哈希比对（调用方负责）。
+fn download_one(
+    url: &str,
+    dest: &Path,
+    cancel: &AtomicBool,
+    tx: &tokio::sync::mpsc::UnboundedSender<DownloadEvent>,
+) -> OneOutcome {
     use std::io::{Read, Write};
     use std::sync::atomic::Ordering;
 
     use sha2::Digest;
 
+    // 进度归零：多源重试时 UI 进度条从头计
     let _ = tx.send(DownloadEvent::Progress { received: 0, total: None });
 
     let resp = match ureq::get(url).call() {
         Ok(r) => r,
         Err(e) => {
-            let _ = tx.send(DownloadEvent::Failed(trf("连接失败：{}", &[&e.to_string()])));
-            return;
+            return OneOutcome::Error(trf("连接失败：{}", &[&e.to_string()]));
         }
     };
     let total = resp
@@ -334,8 +399,7 @@ fn download_blocking(
     let file = match std::fs::File::create(dest) {
         Ok(f) => f,
         Err(e) => {
-            let _ = tx.send(DownloadEvent::Failed(trf("无法创建临时文件：{}", &[&e.to_string()])));
-            return;
+            return OneOutcome::Error(trf("无法创建临时文件：{}", &[&e.to_string()]));
         }
     };
     let mut writer = std::io::BufWriter::new(file);
@@ -350,7 +414,7 @@ fn download_blocking(
             let _ = writer.flush();
             let _ = std::fs::remove_file(dest);
             let _ = tx.send(DownloadEvent::Failed("已取消下载".into()));
-            return;
+            return OneOutcome::Cancelled;
         }
         match reader.read(&mut buf) {
             Ok(0) => break,
@@ -358,9 +422,7 @@ fn download_blocking(
                 hasher.update(&buf[..n]);
                 received += n as u64;
                 if let Err(e) = writer.write_all(&buf[..n]) {
-                    let _ = tx.send(DownloadEvent::Failed(trf("写入失败：{}", &[&e.to_string()])));
-                    let _ = std::fs::remove_file(dest);
-                    return;
+                    return OneOutcome::Error(trf("写入失败：{}", &[&e.to_string()]));
                 }
                 // 限频回报：每 256KB 或每 100ms，避免消息风暴
                 if received % (256 * 1024) < 64 * 1024
@@ -371,29 +433,15 @@ fn download_blocking(
                 }
             }
             Err(e) => {
-                let _ = std::fs::remove_file(dest);
-                let _ = tx.send(DownloadEvent::Failed(trf("网络中断：{}", &[&e.to_string()])));
-                return;
+                return OneOutcome::Error(trf("网络中断：{}", &[&e.to_string()]));
             }
         }
     }
     if writer.flush().is_err() {
-        let _ = tx.send(DownloadEvent::Failed("写入失败（收尾）".into()));
-        let _ = std::fs::remove_file(dest);
-        return;
+        return OneOutcome::Error("写入失败（收尾）".into());
     }
 
-    // SHA-256 强校验（清单提供摘要时）
-    if let Some(expect) = sha256 {
-        let actual = format!("{:x}", hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expect) {
-            let _ = std::fs::remove_file(dest);
-            let _ = tx.send(DownloadEvent::Failed(UpdaterError::HashMismatch.to_string()));
-            return;
-        }
-    }
-
-    let _ = tx.send(DownloadEvent::Done { path: dest.to_path_buf() });
+    OneOutcome::Success(format!("{:x}", hasher.finalize()))
 }
 
 /* ═════════════════ 安装 / 浏览器 ═════════════════ */

@@ -79,3 +79,9 @@ jobs:
             完整变更见「设置 → 更新日志」。
           files: dist/cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe
           fail_on_unmatched_files: true
+
+      # 发版当刻 main 分支的清单若已提前回填，此步立即刷新 CDN；
+      # 若清单是发版后才回填（常规流程），由 purge-cdn.yml 在 push
+      # 清单变更时自动刷新——两处兜底，确保发版后清单最多分钟级可见。
+      - name: Purge jsDelivr CDN cache
+        run: curl -sS -X POST "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"

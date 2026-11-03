@@ -1,0 +1,32 @@
+# 自动刷新 jsDelivr 边缘缓存。
+#
+# 背景：jsDelivr 对 /gh/ 路径有 ~12h 边缘缓存，发版后手动回填
+# update-manifest.json 并 push 到 main 时，CDN 可能仍返回旧清单
+# （旧版本号 → 用户「检查更新」看不到新版本）。本工作流在清单文件
+# 变更推送到 main 后自动 purge，替代原先的手动 SOP 步骤：
+#   curl -X POST https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json
+#
+# purge 是公开 API，无需 token；purge 后再拉一次 CDN 内容回显，
+# 用于在 Actions 日志里确认新版本号已生效。
+name: Purge jsDelivr CDN
+
+on:
+  push:
+    branches: [main]
+    paths: ["update-manifest.json"]
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge manifest cache and verify
+        run: |
+          echo "==> Purging jsDelivr cache..."
+          curl -sS -X POST "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
+          echo
+          echo "==> CDN now serves:"
+          curl -sS "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json" | head -c 500
+          echo

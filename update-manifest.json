@@ -6,7 +6,13 @@
   "platforms": {
     "windows-x86_64": {
       "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
-      "size": 39731305
+      "mirror_urls": [
+        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
+        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
+        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe"
+      ],
+      "size": 39731305,
+      "sha256": "0c41c64389c2d9860282f23158353120c9c384da1aebbb1038c769e7690c745a"
     }
   }
 }
