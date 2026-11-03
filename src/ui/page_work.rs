@@ -1145,21 +1145,21 @@ fn recompute(app: &mut App) -> Task<Message> {
                 // 推理叠加会把内存顶到 10GB+ 直到系统 OOM（进程闪退）。
                 // 这里只有最新一次请求能通过闸门；过期的在门口凭取消令牌自行退出。
                 const NN_GATE_POLL_MS: u64 = 120;
-                loop {
+                // RAII 守卫：占闸直到本作用域结束（含 panic 展开），不会泄漏
+                let _gate = loop {
                     if *cancel_rx.borrow() > seq {
                         return Err(tr("已取消").to_string());
                     }
-                    if crate::core::nn::claim_inference() {
-                        break;
+                    if let Some(g) = crate::core::nn::try_claim_inference() {
+                        break g;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(NN_GATE_POLL_MS));
-                }
+                };
                 // panic 兜底：任何一处索引/解包异常都降级为错误消息，而不是
                 // 让 panic 沿 tokio 阻塞线程炸掉整个进程。
                 let mask = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     crate::core::nn::matte(&info, src.as_raw(), w, h)
                 }));
-                crate::core::nn::release_inference();
                 let mask = match mask {
                     Ok(r) => r?,
                     Err(_) => {

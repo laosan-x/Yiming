@@ -59,11 +59,18 @@ fn matte_payload(app: &App, payload: LoadedPayload) -> Task<Message> {
         move || {
             let (w, h) = (payload.rgba.width() as usize, payload.rgba.height() as usize);
             let fg = if let Some(info) = &model_info {
-                if !nn::claim_inference() {
+                // RAII 守卫：占闸直到本作用域结束；catch_unwind 兜底防止
+                // panic 沿 tokio 阻塞线程炸进程（闸门由守卫 drop 归还）
+                let Some(_gate) = nn::try_claim_inference() else {
                     return Err(trf("{} 推理进行中，请稍候再试", &[info.name.as_str()]));
-                }
-                let r = nn::matte(info, payload.rgba.as_raw(), w, h);
-                nn::release_inference();
+                };
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    nn::matte(info, payload.rgba.as_raw(), w, h)
+                }));
+                let r = match r {
+                    Ok(r) => r,
+                    Err(_) => Err(tr("推理线程异常退出（模型可能不兼容当前图片）").to_string()),
+                };
                 match r {
                     Ok(mask) => imgcore::apply_mask(&payload.rgba, &mask),
                     Err(e) => return Err(trf("{} 抠图失败：{}", &[info.name.as_str(), &e])),
@@ -1185,11 +1192,16 @@ fn run_batch_one(
 
     // 抠图（与单张链路同一套模型选择 / 回退逻辑）
     let fg = if let Some(info) = model_info {
-        if !nn::claim_inference() {
+        let Some(_gate) = nn::try_claim_inference() else {
             return Err(tr("推理进行中，请稍候再试").to_string());
-        }
-        let r = nn::matte(info, loaded.rgba.as_raw(), w, h);
-        nn::release_inference();
+        };
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            nn::matte(info, loaded.rgba.as_raw(), w, h)
+        }));
+        let r = match r {
+            Ok(r) => r,
+            Err(_) => Err(tr("推理线程异常退出（模型可能不兼容当前图片）").to_string()),
+        };
         match r {
             Ok(mask) => imgcore::apply_mask(&loaded.rgba, &mask),
             Err(e) => return Err(trf("抠图失败：{}", &[&e])),

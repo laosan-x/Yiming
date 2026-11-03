@@ -732,6 +732,22 @@ pub fn release_inference() {
     NN_INFERENCE_BUSY.store(false, std::sync::atomic::Ordering::Release);
 }
 
+/// 推理闸门 RAII 守卫：持有期间占住闸门，drop（含 panic 展开栈）时自动归还。
+/// 用它替代手动 claim/release 对，杜绝 panic 或提前 return 造成的永久锁死
+/// ——闸门一旦泄漏，此后所有神经网络抠图都会失败/挂起，直到重启进程。
+pub struct InferenceGuard;
+
+impl Drop for InferenceGuard {
+    fn drop(&mut self) {
+        release_inference();
+    }
+}
+
+/// 尝试占住推理闸门；成功返回守卫（drop 时自动归还），失败返回 `None`。
+pub fn try_claim_inference() -> Option<InferenceGuard> {
+    claim_inference().then_some(InferenceGuard)
+}
+
 /// 从输出里定位 alpha 平面，并回传它的真实尺寸（宽、高）。
 ///
 /// BiRefNet 输出 [1,1,1024,1024]；u2netp 另有 6 路 side 输出（d0..d6），
@@ -1005,6 +1021,49 @@ mod tests {
         assert!(corner < 128, "白色角落应为背景（实际 {corner}）");
         // 软蒙版特征：不是非黑即白的二值图（边缘存在中间值）
         assert!(mask.iter().any(|&v| v > 8 && v < 247), "应存在软边过渡");
+    }
+
+    /// 探针：真实运行 model_fp16.onnx（InSPyReNet，本机插件目录 199MB）。
+    /// 用于排查「本地打包正常、GitHub 分发包失败」的差异定位；
+    /// #[ignore]：依赖本机大模型文件，仅 `cargo test -- --ignored` 手动运行。
+    #[test]
+    #[ignore = "依赖本机插件目录的 199MB 模型文件，仅手动排查时运行"]
+    fn probe_inspyrenet_model_fp16() {
+        let path = r"D:\helloworld\onnx\model_fp16.onnx";
+        let info = NnModelInfo {
+            id: "nn:model_fp16.onnx".into(),
+            label: "InSPyReNet".into(),
+            display_name: "InSPyReNet".into(),
+            name: "InSPyReNet".into(),
+            file: "model_fp16.onnx".into(),
+            path: path.into(),
+            size_mb: 189.9,
+            input_size: 1024,
+            category: ModelCategory::Salient,
+        };
+        let (w, h) = (640usize, 427usize);
+        let mut rgba = vec![255u8; w * h * 4]; // 白底
+        for y in h / 4..h * 3 / 4 {
+            for x in w / 4..w * 3 / 4 {
+                let i = (y * w + x) * 4;
+                rgba[i] = 30;
+                rgba[i + 1] = 30;
+                rgba[i + 2] = 30;
+                rgba[i + 3] = 255;
+            }
+        }
+        let t0 = std::time::Instant::now();
+        match matte(&info, &rgba, w, h) {
+            Ok(mask) => {
+                let mn = *mask.iter().min().unwrap();
+                let mx = *mask.iter().max().unwrap();
+                let fg = mask.iter().filter(|&&v| v > 127).count();
+                println!("[probe] OK in {:?}", t0.elapsed());
+                println!("[probe] mask range {mn}..{mx}, fg {fg}/{}", w * h);
+                assert!(fg > w * h / 16, "中央方块应被识别为前景");
+            }
+            Err(e) => panic!("[probe] matte FAILED: {e}"),
+        }
     }
 
 
