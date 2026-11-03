@@ -8,6 +8,11 @@
 #
 # purge 是公开 API，无需 token；purge 后再拉一次 CDN 内容回显，
 # 用于在 Actions 日志里确认新版本号已生效。
+#
+# ⚠️ purge 对同一路径有频率限制：短时间内重复 purge 会返回
+# {"throttled": true, "throttlingReset": <秒>}，且 CDN 不刷新，
+# 需等窗口（约 15-20 分钟）过后重试。本工作流每次清单变更只
+# purge 一次，天然不会触发；手动排障时切勿循环重试。
 name: Purge jsDelivr CDN
 
 on:
