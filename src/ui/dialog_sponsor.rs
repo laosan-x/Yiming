@@ -4,11 +4,9 @@
 //! - 从窗口右缘（标题栏下方）滑入停靠，不遮挡页面内容，无压暗遮罩
 //! - 入场动画：横向滑入 28px + 就位，16ms/帧；浮层外点击任意处关闭
 //! - 图标一律黑白灰（不用强调色），与系统原生风格一致
-//! - 收款码：优先读 `content/sponsor/{wechat,alipay}.png`（exe 同目录 / 工作目录），
-//!   缺失时回退编译期内嵌占位图；替换外部图片重启即生效
-//! - 金额仅作扫码时的参考提示，不参与任何支付流程
-//! - 收款码采用**分段切换单码展示**：一次只显示一张码（更大更好扫），
-//!   上方「微信支付 / 支付宝」分段标签切换
+//! - 国内打赏引导到「其他支持渠道」的爱发电（支持微信/支付宝），
+//!   不再内置收款码图片（原 content/sponsor/{wechat,alipay}.png 方案已移除）
+//! - 金额仅作参考提示，不参与任何支付流程
 //!
 //! 引导策略（见 docs/SPONSORSHIP.md）：
 //! ① 价值先行：免费/无广告/本地隐私三件套标签 + 「支持持续开发」话术
@@ -17,8 +15,7 @@
 //! ⑤ 里程碑目标：links.json `goal` 配置驱动，默认关闭、整区不渲染
 //! ⑥ 多语言：全部文案走 tr/trf；渠道 label / 目标名由配置自带（可任意语言）
 
-use iced::widget::image::Handle;
-use iced::widget::{button, column, container, image, mouse_area, row, stack, text, text_input, Space};
+use iced::widget::{button, column, container, mouse_area, row, stack, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use std::sync::OnceLock;
 
@@ -41,37 +38,6 @@ const DOCK_TOP: f32 = 10.0;
 const DOCK_RIGHT: f32 = 98.0;
 /// 滑入距离（px）
 const SLIDE: f32 = 28.0;
-
-static WECHAT_QR: OnceLock<Handle> = OnceLock::new();
-static ALIPAY_QR: OnceLock<Handle> = OnceLock::new();
-
-/// 收款码加载：exe 同目录 → 工作目录的 `content/sponsor/<name>` → 内嵌占位图
-fn load_qr(name: &str, embedded: &'static [u8]) -> Handle {
-    let rel = std::path::Path::new("content/sponsor").join(name);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            if let Ok(bytes) = std::fs::read(dir.join(&rel)) {
-                return Handle::from_bytes(bytes);
-            }
-        }
-    }
-    if let Ok(bytes) = std::fs::read(&rel) {
-        return Handle::from_bytes(bytes);
-    }
-    Handle::from_bytes(embedded.to_vec())
-}
-
-fn wechat_qr() -> Handle {
-    WECHAT_QR
-        .get_or_init(|| load_qr("wechat.png", include_bytes!("../../content/sponsor/wechat.png")))
-        .clone()
-}
-
-fn alipay_qr() -> Handle {
-    ALIPAY_QR
-        .get_or_init(|| load_qr("alipay.png", include_bytes!("../../content/sponsor/alipay.png")))
-        .clone()
-}
 
 /* ── 打赏配置（links.json 配置化）── */
 
@@ -163,19 +129,6 @@ fn card_style(_t: &Theme) -> container::Style {
     }
 }
 
-/// 二维码小卡样式
-fn qr_card_style(_t: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(PANEL_2())),
-        border: Border {
-            color: LINE(),
-            width: 1.0,
-            radius: 10.0.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
 /// 金额 chip：未选中（黑白灰 hairline）
 fn chip_style(_t: &Theme, s: button::Status) -> button::Style {
     match s {
@@ -229,38 +182,11 @@ fn ghost_close_style(_t: &Theme, s: button::Status) -> button::Style {
     }
 }
 
-/// 单张收款码小卡
-fn qr_card<'a>(label: &'static str, handle: Handle, size: f32) -> Element<'a, Message> {
-    container(
-        column![
-            container(image(handle).width(Length::Fixed(size)).height(Length::Fixed(size)))
-                .style(|_t| container::Style {
-                    background: Some(Background::Color(Color::WHITE)),
-                    border: Border {
-                        color: LINE(),
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }),
-            text(label).size(FS_XS).color(TXT2()),
-        ]
-        .spacing(4)
-        .align_x(Alignment::Center),
-    )
-    .padding(8)
-    .width(Length::Fill)
-    .style(qr_card_style)
-    .into()
-}
-
 /// 打赏浮层：右缘停靠（标题栏下方），横向滑入；浮层外点击关闭
 pub fn modal(app: &App) -> Element<'_, Message> {
     let a = app.sponsor_anim.clamp(0.0, 1.0);
     // 浮层宽：固定 360，窄窗钳制
     let card_w = (app.win_w - 2.0 * BODY_PAD - 12.0).clamp(300.0, 360.0);
-    // 单码展示尺寸（分段切换后一张码独占宽度，可以给大一些）
-    let qr_size = 168.0;
 
     // 透明拦截层：浮层外点击任意处关闭（不绘制遮罩，页面不被压暗）
     let scrim = mouse_area(
@@ -335,31 +261,6 @@ pub fn modal(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .into()
     });
-
-    // 收款码：分段切换单码展示（微信 / 支付宝）——一张码独占焦点，
-    // 扫码面积更大，也避免双码并排的拥挤观感
-    let tabs = [tr("微信支付"), tr("支付宝")];
-    let sel = app.sponsor_qr_tab.min(tabs.len() - 1);
-    let mut seg = row![].spacing(6).align_y(Alignment::Center);
-    for (i, label) in tabs.iter().enumerate() {
-        let selected = i == sel;
-        seg = seg.push(
-            button(text(*label).size(FS_SM).color(if selected { BG() } else { TXT2() }))
-                .padding(pad(3.0, 14.0, 3.0, 14.0))
-                .style(if selected { chip_sel_style } else { chip_style })
-                .on_press(Message::Sponsor(SponsorMessage::QrTab(i))),
-        );
-    }
-    let (qr_label, qr_handle) = if sel == 1 {
-        (tr("支付宝收款"), alipay_qr())
-    } else {
-        (tr("微信收款"), wechat_qr())
-    };
-    let qrs: Element<'_, Message> = column![seg, qr_card(qr_label, qr_handle, qr_size)]
-        .spacing(8)
-        .align_x(Alignment::Center)
-        .width(Length::Fill)
-        .into();
 
     // 链接渠道 chips（links.json 配置驱动；配置为空则整区隐藏）
     let links = &sponsor_config().channels;
@@ -470,13 +371,13 @@ pub fn modal(app: &App) -> Element<'_, Message> {
             .on_input(|s| Message::Sponsor(SponsorMessage::CustomInput(s))),
     );
 
-    // 金额提示：自定义优先，其次选中的档位
+    // 金额提示：自定义优先，其次选中的档位（引导到渠道页输入）
     let custom = app.sponsor_custom.trim().parse::<f32>().ok();
     let hint = if let Some(v) = custom.filter(|v| *v > 0.0) {
-        trf("扫码时输入 {} 即可，金额不限，随心就好。", &[&fmt_amount(v)])
+        trf("在爱发电 / Ko-fi 输入 {} 即可，金额不限，随心就好。", &[&fmt_amount(v)])
     } else {
         trf(
-            "扫码时可输入 {}，金额不限，随心就好。",
+            "在爱发电 / Ko-fi 输入 {} 即可，金额不限，随心就好。",
             &[&fmt_amount(app.sponsor_amount)],
         )
     };
@@ -489,12 +390,11 @@ pub fn modal(app: &App) -> Element<'_, Message> {
     .color(TXT3())
     .width(Length::Fill);
 
-    // 主体：固定区（价值三件套 → 文案 → Star → 收款码）+ 可选区（渠道 / 里程碑）
+    // 主体：固定区（价值三件套 → 文案 → Star）+ 可选区（渠道 / 里程碑）
     let mut body = column![head, trio, copy].spacing(8).width(Length::Fill);
     if let Some(sec) = star_sec {
         body = body.push(sec);
     }
-    body = body.push(qrs);
     if let Some(sec) = links_section {
         body = body.push(sec);
     }

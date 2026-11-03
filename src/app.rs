@@ -155,8 +155,6 @@ pub struct App {
     pub sponsor_amount: f32,
     /// 自定义金额输入（字符串，解析失败按 0 处理）
     pub sponsor_custom: String,
-    /// 收款码分段标签（0 = 微信，1 = 支付宝）
-    pub sponsor_qr_tab: usize,
 
     /* ─ 关于页 Markdown 内容 ── */
     /// 解析后的关于页文档（content/about/*.md，进入页面时重新加载）
@@ -602,7 +600,6 @@ impl App {
             sponsor_anim: 1.0,
             sponsor_amount: 9.9,
             sponsor_custom: String::new(),
-            sponsor_qr_tab: 0,
         };
         if first {
             // 首次运行给一次引导提示；写入标记，之后不再打扰（对应原项目 hasSeen()）
@@ -1016,10 +1013,6 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
             }
             SponsorMessage::CustomInput(s) => {
                 app.sponsor_custom = s;
-                Task::none()
-            }
-            SponsorMessage::QrTab(i) => {
-                app.sponsor_qr_tab = i;
                 Task::none()
             }
         }
