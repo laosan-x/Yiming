@@ -868,9 +868,36 @@ fn run_with_fallback(
     input: &[f32],
     size: usize,
 ) -> Result<(Vec<f32>, usize, usize), String> {
+    let used_dml = want_dml(info);
     // 第一次尝试（可能是 GPU）
     match run_once(info, input, size) {
-        Ok(result) => Ok(result),
+        Ok(result) => {
+            // DirectML 静默垃圾守卫：某些 ORT 发行版（如官方 win-x64 CPU 包）
+            // 的 DML EP 注册返回"成功"，推理却不报错地输出**恒定值**蒙版
+            // （常数经 min-max 归一化后整体归零）。恒定 alpha 对任何输入都
+            // 无意义——视为 DML 故障：置降级标记、释放会话、用 CPU 会话
+            // 重跑一次（want_dml 此后返回 false，新会话必为 CPU）。
+            if used_dml && {
+                let mut mi = f32::INFINITY;
+                let mut ma = f32::NEG_INFINITY;
+                for &v in &result.0 {
+                    if v < mi {
+                        mi = v;
+                    }
+                    if v > ma {
+                        ma = v;
+                    }
+                }
+                (ma - mi) <= 1e-4
+            } {
+                nn_log("DirectML 推理输出全零（静默垃圾），降级到 CPU 并重试");
+                *DML_FAILED.lock().unwrap_or_else(|p| p.into_inner()) = true;
+                release(&info.id);
+                get_session(info)?;
+                return run_once(info, input, size);
+            }
+            Ok(result)
+        }
         Err(e) => {
             // 只处理 DirectML 相关失败；其它错误原样上抛
             if !e.contains("Dml") && !e.contains("DirectML") {
@@ -1061,9 +1088,18 @@ mod tests {
     /// 探针：真实运行 model_fp16.onnx（InSPyReNet，本机插件目录 199MB）。
     /// 用于排查「本地打包正常、GitHub 分发包失败」的差异定位；
     /// #[ignore]：依赖本机大模型文件，仅 `cargo test -- --ignored` 手动运行。
+    ///
+    /// 环境变量注入（排查矩阵用）：
+    /// - `PROBE_ORT_DLL`：指定 onnxruntime.dll 路径（对比 CI 包 / 本地包 DLL）
+    /// - `PROBE_IMG`：真实照片路径（默认合成图）
+    /// - `PROBE_W`/`PROBE_H`：测试图尺寸（默认 640×427）
     #[test]
     #[ignore = "依赖本机插件目录的 199MB 模型文件，仅手动排查时运行"]
     fn probe_inspyrenet_model_fp16() {
+        if let Ok(dll) = std::env::var("PROBE_ORT_DLL") {
+            std::env::set_var("ORT_DYLIB_PATH", &dll);
+            println!("[probe] ORT DLL = {dll}");
+        }
         let path = r"D:\helloworld\onnx\model_fp16.onnx";
         let info = NnModelInfo {
             id: "nn:model_fp16.onnx".into(),
@@ -1076,15 +1112,29 @@ mod tests {
             input_size: 1024,
             category: ModelCategory::Salient,
         };
-        let (w, h) = (640usize, 427usize);
-        let mut rgba = vec![255u8; w * h * 4]; // 白底
-        for y in h / 4..h * 3 / 4 {
-            for x in w / 4..w * 3 / 4 {
-                let i = (y * w + x) * 4;
-                rgba[i] = 30;
-                rgba[i + 1] = 30;
-                rgba[i + 2] = 30;
-                rgba[i + 3] = 255;
+        // 测试图：默认白底黑方块；PROBE_IMG 给定时读真实照片并缩放到指定尺寸
+        let (w, h): (usize, usize) = match (
+            std::env::var("PROBE_W").ok().and_then(|v| v.parse().ok()),
+            std::env::var("PROBE_H").ok().and_then(|v| v.parse().ok()),
+        ) {
+            (Some(w), Some(h)) => (w, h),
+            _ => (640, 427),
+        };
+        let mut rgba = vec![255u8; w * h * 4];
+        if let Ok(img_path) = std::env::var("PROBE_IMG") {
+            let im = image::open(&img_path).expect("PROBE_IMG 读取失败").to_rgba8();
+            let im = image::imageops::resize(&im, w as u32, h as u32, image::imageops::FilterType::Triangle);
+            rgba = im.into_raw();
+            println!("[probe] IMG = {img_path} ({w}×{h})");
+        } else {
+            for y in h / 4..h * 3 / 4 {
+                for x in w / 4..w * 3 / 4 {
+                    let i = (y * w + x) * 4;
+                    rgba[i] = 30;
+                    rgba[i + 1] = 30;
+                    rgba[i + 2] = 30;
+                    rgba[i + 3] = 255;
+                }
             }
         }
         let t0 = std::time::Instant::now();
@@ -1093,9 +1143,25 @@ mod tests {
                 let mn = *mask.iter().min().unwrap();
                 let mx = *mask.iter().max().unwrap();
                 let fg = mask.iter().filter(|&&v| v > 127).count();
+                let soft = mask.iter().filter(|&&v| v > 8 && v < 247).count();
                 println!("[probe] OK in {:?}", t0.elapsed());
-                println!("[probe] mask range {mn}..{mx}, fg {fg}/{}", w * h);
-                assert!(fg > w * h / 16, "中央方块应被识别为前景");
+                println!("[probe] mask range {mn}..{mx}, fg {fg}/{} ({:.1}%), soft {soft}", w * h, fg as f64 / (w * h) as f64 * 100.0);
+                // 前景质心（诊断蒙版空间错位）
+                let (mut sx, mut sy, mut n) = (0u64, 0u64, 0u64);
+                for (idx, &v) in mask.iter().enumerate() {
+                    if v > 127 {
+                        sx += (idx % w) as u64;
+                        sy += (idx / w) as u64;
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    println!(
+                        "[probe] fg centroid = ({:.2}, {:.2}) normalized (image center = 0.5, 0.5)",
+                        sx as f64 / n as f64 / w as f64,
+                        sy as f64 / n as f64 / h as f64
+                    );
+                }
             }
             Err(e) => panic!("[probe] matte FAILED: {e}"),
         }
