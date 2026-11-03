@@ -40,8 +40,17 @@ use crate::message::{Message, UpdaterMessage};
 
 /* ═════════════════ 常量 ═════════════════ */
 
-/// 正式清单地址（仓库根 update-manifest.json，随版本发布同步更新）
-pub const UPDATE_MANIFEST_URL: &str = "https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json";
+/// 清单候选地址（按序尝试，任一成功即用）：
+/// 1. jsDelivr CDN——中国大陆可直连（raw.githubusercontent.com 在境内被墙，
+///    是 v0.4.1 用户「检查更新失败：timed out」的根因）；
+/// 2. raw.githubusercontent.com——官方源，作为 jsDelivr 不可用时的兜底。
+///
+/// 注意 jsDelivr 对 /gh/ 有 ~12h 边缘缓存，发版后需 purge
+/// （curl https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json）。
+pub const MANIFEST_URLS: &[&str] = &[
+    "https://cdn.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json",
+    "https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json",
+];
 /// 清单不可用时的兜底下载页（浏览器打开）
 pub const DOWNLOAD_PAGE_URL: &str = "https://github.com/laosan-x/Yiming/releases/latest";
 /// 自动检查冷却期：24 小时检查一次
@@ -170,9 +179,12 @@ pub fn current_version_text() -> &'static str {
 
 /* ═════════════════ 检查 ═════════════════ */
 
-/// 清单地址（COCOLE_UPDATE_URL 环境变量优先，本地 mock 联调用）
-pub fn manifest_url() -> String {
-    std::env::var("COCOLE_UPDATE_URL").unwrap_or_else(|_| UPDATE_MANIFEST_URL.to_string())
+/// 清单候选地址（COCOLE_UPDATE_URL 环境变量优先，本地 mock 联调用）
+pub fn manifest_urls() -> Vec<String> {
+    match std::env::var("COCOLE_UPDATE_URL") {
+        Ok(u) if !u.is_empty() => vec![u],
+        _ => MANIFEST_URLS.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 /// Unix 秒
@@ -191,12 +203,25 @@ pub fn should_auto_check(last_check: Option<u64>) -> bool {
     }
 }
 
-/// 检查更新（异步入口）：拉取清单 → 比对版本 → 摘出当前平台资产
+/// 检查更新（异步入口）：逐个候选源拉取清单 → 比对版本 → 摘出当前平台资产
 pub async fn check() -> Result<CheckOutcome, UpdaterError> {
-    let url = manifest_url();
-    tokio::task::spawn_blocking(move || check_blocking(&url))
-        .await
-        .map_err(|e| UpdaterError::Network(trf("后台任务异常：{}", &[&e.to_string()])))?
+    let urls = manifest_urls();
+    tokio::task::spawn_blocking(move || {
+        let mut last: Option<UpdaterError> = None;
+        for url in urls {
+            match check_blocking(&url) {
+                Ok(outcome) => return Ok(outcome),
+                // 平台缺失 / 版本解析失败是清单本身的问题，换源也没用，直接返回
+                Err(e @ (UpdaterError::NoPlatformAsset(_) | UpdaterError::Parse(_))) => {
+                    return Err(e)
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or(UpdaterError::Network("无可用清单源".into())))
+    })
+    .await
+    .map_err(|e| UpdaterError::Network(trf("后台任务异常：{}", &[&e.to_string()])))?
 }
 
 fn check_blocking(url: &str) -> Result<CheckOutcome, UpdaterError> {
