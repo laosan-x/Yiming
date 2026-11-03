@@ -1,18 +1,18 @@
 {
-  "version": "0.4.2",
-  "notes": "壹鸣 WonderLand v0.4.2\n- 修复：证件照批量抠图异常后推理闸门可能被永久占用，导致后续所有神经网络抠图失败直到重启（改为 RAII 守卫自动归还）\n- 修复：安装包补齐 onnxruntime_providers_shared.dll（DirectML 执行提供程序注册依赖）\n- 新增：神经网络诊断日志（%LOCALAPPDATA%\\yiming\\cocole-iced\\data\\logs\\nn.log），报障时提供该文件即可定位\n- 打赏浮窗：移除内置收款码，改为爱发电 / Ko-fi 渠道直达；金额档位与自定义输入分组排版",
+  "version": "0.4.3",
+  "notes": "壹鸣 WonderLand v0.4.3\n- 改进：更新包下载支持多源镜像回退——GitHub 主源失败自动切换境内可达镜像，下载不再受单源波动影响\n- 改进：安装包下载全程 SHA-256 强校验，内容不符自动换源重下，杜绝损坏或被篡改的安装包落地",
   "pub_date": "2026-11-03",
   "mandatory": false,
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.3/cocole-iced-v0.4.3-setup.exe",
       "mirror_urls": [
-        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
-        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
-        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe"
+        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.3/cocole-iced-v0.4.3-setup.exe",
+        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.3/cocole-iced-v0.4.3-setup.exe",
+        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.3/cocole-iced-v0.4.3-setup.exe"
       ],
-      "size": 39731305,
-      "sha256": "0c41c64389c2d9860282f23158353120c9c384da1aebbb1038c769e7690c745a"
+      "size": 0,
+      "sha256": "PENDING"
     }
   }
 }

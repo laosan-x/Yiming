@@ -610,6 +610,15 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.3",
+            "2026-11-03",
+            tr("改进"),
+            &[
+                tr("更新包下载支持多源镜像回退：GitHub 主源失败自动切换境内可达镜像，下载不再受单源波动影响"),
+                tr("安装包下载全程 SHA-256 强校验，内容不符自动换源重下，杜绝损坏或被篡改的安装包落地"),
+            ],
+        ),
+        (
             "0.4.2",
             "2026-11-03",
             tr("修复"),

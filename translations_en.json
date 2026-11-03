@@ -482,5 +482,9 @@
   "本地隐私": "Local & private",
   "壹鸣的所有功能完全免费、没有广告，图片处理全程留在你的电脑上，不上传任何数据。如果它帮到了你，欢迎支持持续开发——让每一个新功能都稳定到来。": "Everything in WonderLand is free, ad-free, and stays on your machine — no uploads, ever. If it helps you, consider supporting ongoing development so every new feature ships reliably.",
   "0 元的 Star 也是很好的支持。": "A free Star is a great way to support us, too.",
-  "去点 Star": "Give a Star"
+  "去点 Star": "Give a Star",
+  "改进": "Improved",
+  "修复": "Fixes",
+  "更新包下载支持多源镜像回退：GitHub 主源失败自动切换境内可达镜像，下载不再受单源波动影响": "Update downloads now fall back to China-reachable mirrors when the GitHub source fails, no longer affected by a single source",
+  "安装包下载全程 SHA-256 强校验，内容不符自动换源重下，杜绝损坏或被篡改的安装包落地": "Installers are verified with SHA-256 throughout; mismatched content is discarded and re-downloaded from another source"
 }
