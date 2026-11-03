@@ -306,7 +306,9 @@ p{margin:0}
 
 /* ================= 页脚 ================= */
 .footer{border-top:1px solid var(--line);padding:64px 0 40px;background:#fff}
-.footer-grid{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
+.footer-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+.footer-brand{display:flex;flex-direction:column;justify-content:center}
+.footer-links{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;align-content:center}
 .footer h4{font-size:13px;color:var(--ink-4);font-weight:600;margin-bottom:14px;letter-spacing:.02em}
 .footer a{display:block;font-size:14px;color:var(--ink-3);padding:5px 0}
 .footer a:hover{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
@@ -328,7 +330,8 @@ p{margin:0}
   .p-item:nth-child(3){border-left:0}
   .p-item:nth-child(n+3){border-top:1px solid var(--line)}
   .compare-grid{grid-template-columns:1fr;max-width:520px;margin-inline:auto}
-  .footer-grid{grid-template-columns:1fr 1fr}
+  .footer-grid{grid-template-columns:1fr;gap:28px}
+  .footer-links{gap:20px}
   .app{grid-template-columns:1fr}
   .app-side,.app-panel{display:none}
   .window-tabs{margin-left:auto}
@@ -349,6 +352,7 @@ p{margin:0}
   .stat:nth-child(3){border-left:0}
   .stat:nth-child(n+3){border-top:1px solid var(--line);padding-top:14px;margin-top:6px}
   .footer-grid{grid-template-columns:1fr;gap:24px}
+  .footer-links{grid-template-columns:1fr;gap:24px}
   .cta{padding:40px 20px;margin-top:64px}
   .hero-actions .btn{flex:1;min-width:150px}
   .nav-cta .gh{display:none}
@@ -791,21 +795,23 @@ p{margin:0}
 <footer class="footer">
   <div class="container">
     <div class="footer-grid">
-      <div>
+      <div class="footer-brand">
         <div class="brand"><img class="brand-mark" src="favicon.png" alt="壹鸣 Wonderland logo" /><span>壹鸣 Wonderland <small>Cutout &amp; ID Photo</small></span></div>
         <p style="margin-top:14px;font-size:14px;color:var(--ink-3);max-width:300px">跨平台 · 永久免费 · 无广告 · 本地推理 · Apache-2.0 开源。让每一张图都能干净地站上任何背景。</p>
       </div>
-      <div>
-        <h4>产品</h4>
-        <a href="#app-preview">界面预览</a><a href="#features">抠图工具</a><a href="#idphoto">证件照规格</a><a href="#download">下载客户端</a>
-      </div>
-      <div>
-        <h4>开源</h4>
-        <a href="https://github.com/laosan-x/Yiming" target="_blank" rel="noopener">GitHub 仓库</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/laosan-x/Yiming/issues" target="_blank" rel="noopener">提交 Issue</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">使用文档</a>
-      </div>
-      <div>
-        <h4>社区</h4>
-        <a href="#donate">支持作者</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">更新日志</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">常见问题</a><a href="https://afdian.com/a/laosan" target="_blank" rel="noopener">爱发电</a>
+      <div class="footer-links">
+        <div>
+          <h4>产品</h4>
+          <a href="#app-preview">界面预览</a><a href="#features">抠图工具</a><a href="#idphoto">证件照规格</a><a href="#download">下载客户端</a>
+        </div>
+        <div>
+          <h4>开源</h4>
+          <a href="https://github.com/laosan-x/Yiming" target="_blank" rel="noopener">GitHub 仓库</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/laosan-x/Yiming/issues" target="_blank" rel="noopener">提交 Issue</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">使用文档</a>
+        </div>
+        <div>
+          <h4>社区</h4>
+          <a href="#donate">支持作者</a><a href="https://github.com/laosan-x/Yiming/releases" target="_blank" rel="noopener">更新日志</a><a href="https://github.com/laosan-x/Yiming#readme" target="_blank" rel="noopener">常见问题</a><a href="https://afdian.com/a/laosan" target="_blank" rel="noopener">爱发电</a>
+        </div>
       </div>
     </div>
     <div class="footer-bottom">
