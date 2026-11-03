@@ -1,6 +1,6 @@
 [package]
 name = "cocole-iced"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "壹鸣 · 商品抠图工作台 —— iced 原生复刻版（无 WebView / 无 Electron）"
 license = "Apache-2.0"

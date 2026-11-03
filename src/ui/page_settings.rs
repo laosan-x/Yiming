@@ -610,6 +610,17 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.2",
+            "2026-11-03",
+            tr("修复"),
+            &[
+                tr("修复证件照批量抠图异常后推理闸门被永久占用的问题（改为 RAII 守卫自动归还）"),
+                tr("安装包补齐 onnxruntime_providers_shared.dll（DirectML 执行提供程序依赖）"),
+                tr("新增神经网络诊断日志文件，报障时可提供日志直接定位"),
+                tr("打赏浮窗：移除内置收款码，改为爱发电 / Ko-fi 渠道直达，分组排版优化"),
+            ],
+        ),
+        (
             "0.4.1",
             "2026-11-03",
             tr("修复"),

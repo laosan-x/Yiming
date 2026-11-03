@@ -1,12 +1,12 @@
 {
-  "version": "0.4.1",
-  "notes": "壹鸣 WonderLand v0.4.1\n- 修复：InSPyReNet 大图抠图时并发推理叠加导致内存溢出闪退（新增全局推理闸门，同一时刻仅一次推理）\n- 修复：u2net / IS-Net 族模型输出未归一化导致蒙版全白或全黑（新增 min-max 归一化后处理）\n- 修复：证件照批量抠图与工具页自动重抠不再互相抢占推理资源",
+  "version": "0.4.2",
+  "notes": "壹鸣 WonderLand v0.4.2\n- 修复：证件照批量抠图异常后推理闸门可能被永久占用，导致后续所有神经网络抠图失败直到重启（改为 RAII 守卫自动归还）\n- 修复：安装包补齐 onnxruntime_providers_shared.dll（DirectML 执行提供程序注册依赖）\n- 新增：神经网络诊断日志（%LOCALAPPDATA%\\yiming\\cocole-iced\\data\\logs\\nn.log），报障时提供该文件即可定位\n- 打赏浮窗：移除内置收款码，改为爱发电 / Ko-fi 渠道直达；金额档位与自定义输入分组排版",
   "pub_date": "2026-11-03",
   "mandatory": false,
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.1/cocole-iced-v0.4.1-setup.exe",
-      "size": 38884825
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.2/cocole-iced-v0.4.2-setup.exe",
+      "size": 0
     }
   }
 }

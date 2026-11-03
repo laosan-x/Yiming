@@ -107,11 +107,11 @@ SectionEnd
 
 ; Uninstall section
 Section "Uninstall"
-    ; models/ 保留用户自行下载的大模型权重，只删随包内置的 3 个轻量模型
+    ; Keep user-downloaded large model weights; only remove the 3 bundled lightweight models
     Delete "$INSTDIR\models\face_detection_yunet_2023mar.onnx"
     Delete "$INSTDIR\models\modnet.onnx"
     Delete "$INSTDIR\models\u2netp.onnx"
-    RMDir "$INSTDIR\models"          ; 目录非空（有用户模型）时会保留
+    RMDir "$INSTDIR\models"          ; Kept if the dir is not empty (user models present)
 
     ; Delete remaining install files
     RMDir /r "$INSTDIR\icons"
