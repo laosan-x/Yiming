@@ -84,4 +84,5 @@ jobs:
       # 若清单是发版后才回填（常规流程），由 purge-cdn.yml 在 push
       # 清单变更时自动刷新——两处兜底，确保发版后清单最多分钟级可见。
       - name: Purge jsDelivr CDN cache
-        run: curl -sS -X POST "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
+        # purge API 仅接受 GET（POST 返回 MethodNotAllowed）
+        run: curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"

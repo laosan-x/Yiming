@@ -25,7 +25,8 @@ jobs:
       - name: Purge manifest cache and verify
         run: |
           echo "==> Purging jsDelivr cache..."
-          curl -sS -X POST "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
+          # purge API 仅接受 GET（POST 返回 MethodNotAllowed）
+          curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
           echo
           echo "==> CDN now serves:"
           curl -sS "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json" | head -c 500

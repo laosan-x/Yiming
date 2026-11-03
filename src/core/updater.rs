@@ -51,7 +51,8 @@ use crate::message::{Message, UpdaterMessage};
 /// 2. raw.githubusercontent.com——官方源，作为 jsDelivr 不可用时的兜底。
 ///
 /// 注意 jsDelivr 对 /gh/ 有 ~12h 边缘缓存，发版后需 purge
-/// （curl https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json）。
+/// （curl "https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json"，
+/// 仅接受 GET；现已由 purge-cdn.yml 在清单变更推送后自动执行）。
 pub const MANIFEST_URLS: &[&str] = &[
     "https://cdn.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json",
     "https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json",
