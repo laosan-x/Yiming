@@ -149,8 +149,6 @@ pub struct App {
     pub win_frame_fixed: bool,
     /// 打赏弹窗展开中
     pub sponsor_open: bool,
-    /// 打赏弹窗入场动画进度 0.0..1.0（fade + scale）
-    pub sponsor_anim: f32,
     /// 选中的建议金额（元；打赏弹窗提示文案用）
     pub sponsor_amount: f32,
     /// 自定义金额输入（字符串，解析失败按 0 处理）
@@ -597,7 +595,6 @@ impl App {
             win_maximized: false,
             win_frame_fixed: false,
             sponsor_open: false,
-            sponsor_anim: 1.0,
             sponsor_amount: 9.9,
             sponsor_custom: String::new(),
         };
@@ -995,15 +992,8 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
         Message::Sponsor(m) => match m {
             SponsorMessage::Open(open) => {
                 app.sponsor_open = open;
-                app.sponsor_anim = if open { 0.0 } else { 1.0 };
                 if open {
                     app.sponsor_custom.clear();
-                }
-                Task::none()
-            }
-            SponsorMessage::Tick => {
-                if app.sponsor_open && app.sponsor_anim < 1.0 {
-                    app.sponsor_anim = (app.sponsor_anim + 0.14).min(1.0);
                 }
                 Task::none()
             }
@@ -1257,14 +1247,6 @@ pub fn subscription(app: &App) -> iced::Subscription<Message> {
         iced::Subscription::none()
     };
 
-    // 打赏弹窗入场动画帧（约 16ms/帧，进度到 1.0 后订阅自动消失）
-    let sponsor_anim = if app.sponsor_open && app.sponsor_anim < 1.0 {
-        iced::time::every(std::time::Duration::from_millis(16))
-            .map(|_| Message::Sponsor(SponsorMessage::Tick))
-    } else {
-        iced::Subscription::none()
-    };
-
     if app.page != Page::Work {
         // 证件照页快捷键：E 导出单张 / Shift+E 导出排版 / 1·2 切视图。
         // （keyboard::listen 只派发未被控件消费的按键，HEX 输入框聚焦时不会误触）
@@ -1292,7 +1274,7 @@ pub fn subscription(app: &App) -> iced::Subscription<Message> {
         } else {
             iced::Subscription::none()
         };
-        return iced::Subscription::batch([resize, files, kbd, spinner, sponsor_anim]);
+        return iced::Subscription::batch([resize, files, kbd, spinner]);
     }
     let crop_mode = app.work.tool == Tool::Crop;
 
@@ -1360,7 +1342,7 @@ pub fn subscription(app: &App) -> iced::Subscription<Message> {
             _ => None,
         });
 
-    iced::Subscription::batch([resize, files, kbd, spinner, sponsor_anim])
+    iced::Subscription::batch([resize, files, kbd, spinner])
 }
 
 /* ═════════════════ view：外壳 + 分发 ═════════════════ */

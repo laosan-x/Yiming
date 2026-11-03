@@ -1,8 +1,8 @@
 //! 打赏浮层（请作者喝杯咖啡）
 //!
 //! 由标题栏右侧的咖啡图标唤起，采用**停靠式浮层**（同消息通知交互）：
-//! - 从窗口右缘（标题栏下方）滑入停靠，不遮挡页面内容，无压暗遮罩
-//! - 入场动画：横向滑入 28px + 就位，16ms/帧；浮层外点击任意处关闭
+//! - 从窗口右缘（标题栏下方）直接就位停靠，不遮挡页面内容，无压暗遮罩
+//! - 浮层外点击任意处关闭
 //! - 图标一律黑白灰（不用强调色），与系统原生风格一致
 //! - 国内打赏引导到「其他支持渠道」的爱发电（支持微信/支付宝），
 //!   不再内置收款码图片（原 content/sponsor/{wechat,alipay}.png 方案已移除）
@@ -36,8 +36,6 @@ const PRESETS: &[f32] = &[6.6, 9.9, 18.8, 66.0];
 /// 内容区右缘 = 窗口右缘 − BODY_PAD(10)。对齐咖啡钮右缘 → 108 − 10 = 98。
 const DOCK_TOP: f32 = 10.0;
 const DOCK_RIGHT: f32 = 98.0;
-/// 滑入距离（px）
-const SLIDE: f32 = 28.0;
 
 /* ── 打赏配置（links.json 配置化）── */
 
@@ -182,9 +180,8 @@ fn ghost_close_style(_t: &Theme, s: button::Status) -> button::Style {
     }
 }
 
-/// 打赏浮层：右缘停靠（标题栏下方），横向滑入；浮层外点击关闭
+/// 打赏浮层：右缘停靠（标题栏下方）直接就位；浮层外点击关闭
 pub fn modal(app: &App) -> Element<'_, Message> {
-    let a = app.sponsor_anim.clamp(0.0, 1.0);
     // 浮层宽：固定 360，窄窗钳制
     let card_w = (app.win_w - 2.0 * BODY_PAD - 12.0).clamp(300.0, 360.0);
 
@@ -406,7 +403,7 @@ pub fn modal(app: &App) -> Element<'_, Message> {
         .padding(pad_all(CARD_PAD))
         .style(card_style);
 
-    // 停靠：右缘、标题栏下方；入场时右侧 padding SLIDE→0，横向滑入就位
+    // 停靠：右缘、标题栏下方，打开即就位
     container(stack![
         scrim,
         container(card)
@@ -416,7 +413,7 @@ pub fn modal(app: &App) -> Element<'_, Message> {
             .align_y(Alignment::Start)
             .padding(pad(
                 DOCK_TOP,
-                DOCK_RIGHT + (1.0 - a) * SLIDE,
+                DOCK_RIGHT,
                 0.0,
                 0.0,
             )),

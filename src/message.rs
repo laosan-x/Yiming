@@ -113,10 +113,8 @@ pub enum TitlebarMessage {
 /// 打赏弹窗交互
 #[derive(Debug, Clone, PartialEq)]
 pub enum SponsorMessage {
-    /// 打开 / 关闭弹窗（开启时重置入场动画）
+    /// 打开 / 关闭弹窗
     Open(bool),
-    /// 入场动画帧推进（fade + scale，16ms 一帧）
-    Tick,
     /// 选择建议金额（元）
     Amount(f32),
     /// 自定义金额输入
