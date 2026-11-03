@@ -587,6 +587,8 @@ const EN: &[(&str, &str)] = &[
     ("壹鸣完全免费、无广告，所有处理都在本机完成。如果它帮到了你，欢迎请作者喝杯咖啡——每一份支持都是持续打磨的动力。", "WonderLand is free, ad-free, and fully local. If it helps you, buying the author a coffee keeps the polish coming."),
     ("微信收款", "WeChat Pay"),
     ("支付宝收款", "Alipay"),
+    ("微信支付", "WeChat Pay"),
+    ("支付宝", "Alipay"),
     ("扫码时输入 {} 即可，金额不限，随心就好。", "Enter {} when you scan — any amount is appreciated."),
     ("扫码时可输入 {}，金额不限，随心就好。", "You can enter {} when scanning — any amount is appreciated."),
     ("打赏不升级、不解锁、不影响任何功能——你的每一杯咖啡，都会变成下一个新功能。", "Tips never unlock features or change behavior — every coffee becomes the next improvement."),

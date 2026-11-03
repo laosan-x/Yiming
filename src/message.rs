@@ -121,6 +121,8 @@ pub enum SponsorMessage {
     Amount(f32),
     /// 自定义金额输入
     CustomInput(String),
+    /// 切换收款码分段标签（0 = 微信，1 = 支付宝）
+    QrTab(usize),
 }
 
 /* ═════════════════ 工作台 ═════════════════ */

@@ -7,7 +7,8 @@
 //! - 收款码：优先读 `content/sponsor/{wechat,alipay}.png`（exe 同目录 / 工作目录），
 //!   缺失时回退编译期内嵌占位图；替换外部图片重启即生效
 //! - 金额仅作扫码时的参考提示，不参与任何支付流程
-//! - 窄窗（<900px）二维码自动改上下排列
+//! - 收款码采用**分段切换单码展示**：一次只显示一张码（更大更好扫），
+//!   上方「微信支付 / 支付宝」分段标签切换
 //!
 //! 引导策略（见 docs/SPONSORSHIP.md）：
 //! ① 价值先行：免费/无广告/本地隐私三件套标签 + 「支持持续开发」话术
@@ -258,9 +259,8 @@ pub fn modal(app: &App) -> Element<'_, Message> {
     let a = app.sponsor_anim.clamp(0.0, 1.0);
     // 浮层宽：固定 360，窄窗钳制
     let card_w = (app.win_w - 2.0 * BODY_PAD - 12.0).clamp(300.0, 360.0);
-    // 窄窗二维码改上下排列（移动端/小窗口适配）
-    let vertical = app.win_w < 900.0;
-    let qr_size = if vertical { 140.0 } else { 132.0 };
+    // 单码展示尺寸（分段切换后一张码独占宽度，可以给大一些）
+    let qr_size = 168.0;
 
     // 透明拦截层：浮层外点击任意处关闭（不绘制遮罩，页面不被压暗）
     let scrim = mouse_area(
@@ -336,24 +336,30 @@ pub fn modal(app: &App) -> Element<'_, Message> {
         .into()
     });
 
-    // 收款码：宽窗并排 / 窄窗纵向
-    let qrs: Element<'_, Message> = if vertical {
-        column![
-            qr_card(tr("微信收款"), wechat_qr(), qr_size),
-            qr_card(tr("支付宝收款"), alipay_qr(), qr_size),
-        ]
-        .spacing(6)
-        .width(Length::Fill)
-        .into()
+    // 收款码：分段切换单码展示（微信 / 支付宝）——一张码独占焦点，
+    // 扫码面积更大，也避免双码并排的拥挤观感
+    let tabs = [tr("微信支付"), tr("支付宝")];
+    let sel = app.sponsor_qr_tab.min(tabs.len() - 1);
+    let mut seg = row![].spacing(6).align_y(Alignment::Center);
+    for (i, label) in tabs.iter().enumerate() {
+        let selected = i == sel;
+        seg = seg.push(
+            button(text(*label).size(FS_SM).color(if selected { BG() } else { TXT2() }))
+                .padding(pad(3.0, 14.0, 3.0, 14.0))
+                .style(if selected { chip_sel_style } else { chip_style })
+                .on_press(Message::Sponsor(SponsorMessage::QrTab(i))),
+        );
+    }
+    let (qr_label, qr_handle) = if sel == 1 {
+        (tr("支付宝收款"), alipay_qr())
     } else {
-        row![
-            qr_card(tr("微信收款"), wechat_qr(), qr_size),
-            qr_card(tr("支付宝收款"), alipay_qr(), qr_size),
-        ]
-        .spacing(6)
-        .width(Length::Fill)
-        .into()
+        (tr("微信收款"), wechat_qr())
     };
+    let qrs: Element<'_, Message> = column![seg, qr_card(qr_label, qr_handle, qr_size)]
+        .spacing(8)
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .into();
 
     // 链接渠道 chips（links.json 配置驱动；配置为空则整区隐藏）
     let links = &sponsor_config().channels;
