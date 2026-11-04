@@ -1,11 +1,13 @@
-//! 聚焦式新手引导（Spotlight）：目标描边高亮 + 说明气泡锚定目标旁。
+//! 聚焦式新手引导：目标自身高亮描边 + 说明气泡锚定目标旁。
 //!
 //! 三件套：
 //! 1. [`Target`] + [`Tracked`]：给目标控件包一层探针 widget，draw 时把自己的
 //!    窗口绝对坐标写进注册表——每帧更新，天然跟随侧栏折叠 / 窗口缩放 / DPI；
-//! 2. [`FocusRing`]：全屏透明 canvas，**只画目标外的一圈圆角描边**——不压暗、
-//!    不覆盖背景，页面原有亮度与内容可读性完全保留。它同时负责捕获点击推进
-//!    引导，事件保持 Ignored 继续传播，点目标本身会真实触发下层控件；
+//! 2. [`GuideLayer`]：全屏透明 canvas，**不绘制任何内容**——唯一的一圈描边
+//!    由目标控件自身的高亮样式（`page_home::card_hi` / CTA 边框）承担，避免
+//!    「控件边框 + 外扩聚焦框」叠成双层描边。它只负责捕获点击推进引导，
+//!    事件保持 Ignored 继续传播，点目标本身会真实触发下层控件；页面完全
+//!    不变暗、不被覆盖；
 //! 3. [`spotlight`]：把说明气泡锚定到目标旁——优先放下方，放不下放上方，
 //!    两者都放不下时兜底顶部居中（目标坐标未注册时同样走兜底，不崩溃）。
 //!
@@ -20,12 +22,11 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{overlay, renderer, Clipboard, Shell, Widget};
 use iced::mouse;
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
+use iced::widget::canvas::{self, Canvas, Geometry};
 use iced::widget::{container, stack};
-use iced::{Alignment, Element, Event, Length, Padding, Point, Rectangle, Size, Theme, Vector};
+use iced::{Alignment, Element, Event, Length, Padding, Rectangle, Size, Theme, Vector};
 
 use crate::message::{HomeMessage, Message};
-use crate::theme::{ACC, R_CARD};
 
 /* ═════════════════ 目标注册表 ═════════════════ */
 
@@ -58,7 +59,7 @@ pub fn bounds(id: Target) -> Option<Rectangle> {
 /// 清空目标坐标注册表（切离首页 / 关闭引导时调用）。
 ///
 /// 窗口 resize、DPI 变化或侧栏折叠后，首页重新 draw 之前存在一段空窗；
-/// 此时若沿用上一帧的绝对坐标开引导，洞会画到错位甚至屏幕外。清空后由
+/// 此时若沿用上一帧的绝对坐标开引导，气泡锚点会落到错位甚至屏幕外。清空后由
 /// `app.rs` 的就绪轮询等待首帧重新注册，避免读到过期坐标。
 pub fn clear() {
     if let Ok(mut m) = tracks().lock() {
@@ -204,46 +205,32 @@ impl<'a> From<Tracked<'a>> for Element<'a, Message> {
     }
 }
 
-/* ═════════════════ 聚焦描边层 ═════════════════ */
+/* ═════════════════ 引导事件层 ═════════════════ */
 
-/// 全屏透明层：只在目标外画一圈圆角描边，**不压暗、不覆盖背景**。
+/// 全屏透明事件层：**不绘制任何内容**，页面完全不变暗、不被覆盖。
 ///
-/// `ring` 为相对画布的描边外框（调用方已外扩呼吸间距）；目标坐标未注册
-/// （None）时不画任何东西，仅由气泡的兜底定位提示用户，页面保持原样。
+/// 唯一的描边由目标控件自身承担（卡片 `card_hi` / CTA 边框，均为主题
+/// `ACC()` 2px + `R_CARD` 圆角）。此前这里还会在目标外扩 6px 再画一圈
+/// 聚焦框，与控件自身边框叠成双线，故移除画布描边、只保留事件职责。
 ///
 /// 事件语义保持不变：任意位置点击都推进引导，且 `Action` 保持
 /// Ignored 让事件继续传播——点目标本身会真实触发下层控件（如上传卡弹文件
 /// 选择器），「操作即学会」；气泡在更上层，其按钮不会走到这里。
-pub struct FocusRing {
-    pub ring: Option<Rectangle>,
-    pub radius: f32,
-}
+pub struct GuideLayer;
 
-impl canvas::Program<Message> for FocusRing {
+impl canvas::Program<Message> for GuideLayer {
     type State = ();
 
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &iced::Renderer,
+        _renderer: &iced::Renderer,
         _theme: &Theme,
-        bounds: Rectangle,
+        _bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let Some(r) = self.ring else {
-            // 无坐标：不画任何覆盖物（绝不整面压暗）
-            return Vec::new();
-        };
-        let mut frame = Frame::new(renderer, bounds.size());
-        // 单层圆角描边：颜色 / 线宽 / 圆角全部复用主题 token，与 `card_hi`
-        // 的目标自身描边保持一致；外框与元素边框之间的间距由调用方外扩给出。
-        let path = Path::rounded_rectangle(
-            Point::new(r.x, r.y),
-            Size::new(r.width, r.height),
-            self.radius.into(),
-        );
-        frame.stroke(&path, Stroke::default().with_color(ACC()).with_width(2.0));
-        vec![frame.into_geometry()]
+        // 无描边、无遮罩：draw 只返回空 geometry，视觉完全交给下层控件
+        Vec::new()
     }
 
     fn update(
@@ -271,34 +258,33 @@ impl canvas::Program<Message> for FocusRing {
 
 const GAP: f32 = 14.0;
 const BUBBLE_W: f32 = 328.0;
-/// 气泡估算高度（仅用于判断洞下方是否放得下；实际高度由内容决定）
+/// 气泡估算高度（仅用于判断锚定框下方是否放得下；实际高度由内容决定）
 const BUBBLE_H_EST: f32 = 196.0;
 
-/// 组装聚焦层：透明描边层 + 锚定在目标旁的说明气泡。
-/// `ring_abs` 为描边外框的窗口绝对坐标（已外扩呼吸间距）；目标坐标未注册
-/// （None）时不画描边、气泡顶部居中兜底，页面不发生任何变暗或覆盖。
+/// 组装引导层：透明事件层 + 锚定在目标旁的说明气泡。
+/// `anchor_abs` 为目标锚定框的窗口绝对坐标（外扩 6px 呼吸间距），**只用于
+/// 气泡定位**，不再绘制外圈描边；坐标未注册（None）时气泡顶部居中兜底，
+/// 页面不发生任何变暗或覆盖。
 pub fn spotlight<'a>(
-    ring_abs: Option<Rectangle>,
+    anchor_abs: Option<Rectangle>,
     bubble: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let root = bounds(Target::Root);
     // 绝对坐标 → 相对画布坐标（画布与 Root 同区域、同坐标系）
-    let ring_rel = ring_abs.zip(root).map(|(h, r)| Rectangle {
+    let ring_rel = anchor_abs.zip(root).map(|(h, r)| Rectangle {
         x: h.x - r.x,
         y: h.y - r.y,
         width: h.width,
         height: h.height,
     });
 
-    let focus = Canvas::new(FocusRing {
-        ring: ring_rel,
-        radius: R_CARD,
-    })
-    .width(Length::Fill)
-    .height(Length::Fill);
+    // 事件层：只接管点击推进，不参与绘制
+    let focus = Canvas::new(GuideLayer)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
-    // 气泡定位：目标下方优先（padding-top 顶推），放不下改上方（底对齐 + padding-bottom），
-    // 水平方向跟随描边左缘并钳制在容器内
+    // 气泡定位：锚定框下方优先（padding-top 顶推），放不下改上方（底对齐 + padding-bottom），
+    // 水平方向跟随锚定框左缘并钳制在容器内
     let anchored = match (ring_rel, root) {
         (Some(h), Some(r)) => {
             let (aw, ah) = (r.width, r.height);

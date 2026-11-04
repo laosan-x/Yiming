@@ -362,7 +362,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .style(move |t| if g == Some(0) { card_hi(t) } else { card(t) })
     .width(Length::Fill)
     .into();
-    // 聚焦引导：draw 时上报自身 bounds（描边 / 气泡锚定数据源）
+    // 聚焦引导：draw 时上报自身 bounds（气泡锚定数据源）
     let start: Element<'_, Message> = guide::Tracked::new(Target::StartCard, start).into();
 
     /* ── 右：快速预设（2 列网格，参考 `.home-presets{gap:10px}`） ── */
@@ -588,7 +588,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     }
 }
 
-/// 引导高亮卡片样式：常规卡 + 强调色描边 + 提升阴影（高亮目标区域用）
+/// 引导高亮卡片样式：常规卡 + 强调色描边 + 提升阴影。
+/// 这是引导期间**唯一**的一圈描边（颜色 / 线宽 / 圆角全部走主题 token），
+/// 引导层本身不再叠加外扩描边，避免双层线框。
 fn card_hi(t: &Theme) -> container::Style {
     let mut st = card(t);
     st.border = Border {
@@ -600,18 +602,21 @@ fn card_hi(t: &Theme) -> container::Style {
     st
 }
 
-/// 分步新手引导：聚焦式（Spotlight）——目标外圈描边高亮（无遮罩、页面
-/// 不变暗），说明气泡锚定在目标旁（guide::spotlight 负责定位与事件穿透）。
+/// 分步新手引导：目标控件**自身**一圈描边高亮（无遮罩、页面不变暗、
+/// 也不再叠加外扩聚焦框），说明气泡锚定在目标旁（guide::spotlight 负责
+/// 定位与事件穿透）。
 fn guide_overlay<'a>(app: &'a App, step: usize) -> Element<'a, Message> {
     let (target, _, _) = GUIDE_STEPS[step];
-    // 描边外扩 6px 呼吸间距，不贴住控件边缘（与首页 grid gap 14px 同系）
-    let ring_abs = guide::bounds(target).map(|r| Rectangle {
+    // 气泡锚定框：目标外扩 6px 呼吸间距（与首页 grid gap 14px 同系）。
+    // 注意它只用于气泡定位，不再绘制描边——描边统一由目标自身的
+    // `card_hi`（前三步）/ CTA 边框（第 4 步）给出，避免双层描边。
+    let anchor_abs = guide::bounds(target).map(|r| Rectangle {
         x: r.x - 6.0,
         y: r.y - 6.0,
         width: r.width + 12.0,
         height: r.height + 12.0,
     });
-    guide::spotlight(ring_abs, guide_bubble(app, step))
+    guide::spotlight(anchor_abs, guide_bubble(app, step))
 }
 
 /// 引导说明气泡：徽标 + 标题 + 步数 → 说明 → 进度点 → 操作行
