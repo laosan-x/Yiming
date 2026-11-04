@@ -926,7 +926,7 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                     if r.w < 5.0 || r.h < 5.0 {
                         app.work.crop = None;
                     } else {
-                        *app.work.crop.as_mut().unwrap() = r;
+                        app.work.crop = Some(r);
                     }
                 }
             } else if let Some(c) = app.work.crop.as_mut() {

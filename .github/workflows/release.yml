@@ -33,6 +33,13 @@ jobs:
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Gate — release version consistency
+        run: python scripts/check-release.py
+
       # ci.yml 只在 push main / PR 时触发，tag push 不触发。发版必须自带门禁，
       # 否则打错 commit 或测试挂掉仍会照常发布。
       - name: Gate — cargo test
@@ -102,10 +109,6 @@ jobs:
       # 旧版客户端只会看到「已是最新版本」，不会拿到 PENDING 摘要白下载。
       # 本步骤产出的 push 会触发 purge-cdn.yml 刷新 CDN 并做一致性校验，
       # 故这里不再单独 purge（同路径短时间内重复 purge 会被 jsDelivr 限流）。
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Generate full update manifest from built installer
         shell: bash
         env:

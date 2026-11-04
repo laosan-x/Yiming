@@ -122,8 +122,9 @@ cargo build --release
 
 ```bash
 cargo build --release
-# 组装暂存目录后执行（installer.nsi 从 dist/cocole-iced-v<版本>-windows-x64/ 取文件）
-nsis-3.10/Bin/makensis.exe installer.nsi
+# 组装暂存目录后执行（脚本自动从 Cargo.toml 读版本并传给 makensis）
+pwsh -File scripts/build-installer.ps1
+# installer.nsi 从 dist/cocole-iced-v<版本>-windows-x64/ 取文件
 ```
 
 ---

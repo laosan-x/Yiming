@@ -121,45 +121,44 @@ pub fn update(app: &mut App, msg: HomeMessage) -> Task<Message> {
             app.toast(tr("证件照参数已重置"));
             Task::none()
         }
+        // 状态转移统一走 guide::transition 纯函数（可 headless 单测）；
+        // 这里只负责把结果写回 App 与持久化副作用。
         HomeMessage::StartGuide => {
-            // 「新手引导」按钮：手动进入分步引导（无论是否已标记完成）
-            app.guide_step = Some(0);
+            app.guide_step =
+                guide::transition(app.guide_step, guide::Action::Start, GUIDE_STEPS.len()).0;
             Task::none()
         }
         HomeMessage::GuidePrev => {
-            if let Some(s) = app.guide_step.as_mut() {
-                *s = s.saturating_sub(1);
-            }
+            app.guide_step =
+                guide::transition(app.guide_step, guide::Action::Prev, GUIDE_STEPS.len()).0;
             Task::none()
         }
         HomeMessage::GuideNext => {
-            match app.guide_step {
-                Some(s) if s + 1 < GUIDE_STEPS.len() => app.guide_step = Some(s + 1),
-                _ => {
-                    // 末步「完成」：写入标记，之后进首页不再自动弹出
-                    app.guide_step = None;
-                    if !app.config.guide_done {
-                        app.config.guide_done = true;
-                        app.persist();
-                    }
-                }
+            let (next, done) =
+                guide::transition(app.guide_step, guide::Action::Next, GUIDE_STEPS.len());
+            app.guide_step = next;
+            if done && !app.config.guide_done {
+                app.config.guide_done = true;
+                app.persist();
             }
             Task::none()
         }
         HomeMessage::GuideGoto(i) => {
-            // 侧栏步骤项点击：直接跳转（界内钳制）
-            app.guide_step = Some(i.min(GUIDE_STEPS.len() - 1));
+            app.guide_step =
+                guide::transition(app.guide_step, guide::Action::Goto(i), GUIDE_STEPS.len()).0;
             Task::none()
         }
         HomeMessage::GuideSkip => {
             // 仅关闭：下次进首页（未标记完成时）仍会自动弹出
-            app.guide_step = None;
+            app.guide_step =
+                guide::transition(app.guide_step, guide::Action::Skip, GUIDE_STEPS.len()).0;
             Task::none()
         }
         HomeMessage::GuideNever => {
-            // 「不再显示」：关闭并持久化记忆
-            app.guide_step = None;
-            if !app.config.guide_done {
+            let (next, done) =
+                guide::transition(app.guide_step, guide::Action::Never, GUIDE_STEPS.len());
+            app.guide_step = next;
+            if done && !app.config.guide_done {
                 app.config.guide_done = true;
                 app.persist();
             }

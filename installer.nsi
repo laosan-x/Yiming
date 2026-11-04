@@ -1,13 +1,20 @@
 ; CocoleIced NSIS Installer Script
-; Usage: makensis installer.nsi
+; Usage: pwsh -File scripts/build-installer.ps1
+;        (reads Cargo.toml and passes -DAPP_VERSION; a bare makensis run
+;         only produces a clearly-marked 0.0.0-dev sentinel build)
 
 !define APP_NAME "CocoleIced"
 !define APP_NAME_CN "YiMing Product Matting Workbench"
 
-; Version: prefer -DAPP_VERSION from the command line (derived from Cargo.toml),
-; fall back to the default below so the two never drift out of sync.
+; Version: MUST be supplied via -DAPP_VERSION (injected from the tag in CI,
+; read from Cargo.toml by scripts/build-installer.ps1 locally). The sentinel
+; default below ensures a bare `makensis installer.nsi` can never silently
+; produce a package that looks like a real release.
+; NOTE: keep this file ASCII-only. NSIS 3.x reads scripts using the system
+; ANSI codepage (ACP) and rejects BOM-less UTF-8 non-ASCII text.
 !ifndef APP_VERSION
-    !define APP_VERSION "0.4.0"
+    !define APP_VERSION "0.0.0-dev"
+    !warning "APP_VERSION not set: using 0.0.0-dev sentinel. Use scripts/build-installer.ps1"
 !endif
 !define APP_PUBLISHER "YiMing"
 !define APP_URL "https://github.com/laosan-x/Yiming"

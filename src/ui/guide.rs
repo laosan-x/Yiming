@@ -57,6 +57,17 @@ pub fn bounds(id: Target) -> Option<Rectangle> {
     m.get(&id).copied()
 }
 
+/// 清空目标坐标注册表（切离首页 / 关闭引导时调用）。
+///
+/// 窗口 resize、DPI 变化或侧栏折叠后，首页重新 draw 之前存在一段空窗；
+/// 此时若沿用上一帧的绝对坐标开引导，洞会画到错位甚至屏幕外。清空后由
+/// `app.rs` 的就绪轮询等待首帧重新注册，避免读到过期坐标。
+pub fn clear() {
+    if let Ok(mut m) = tracks().lock() {
+        m.clear();
+    }
+}
+
 fn track(id: Target, rect: Rectangle) {
     if let Ok(mut m) = tracks().lock() {
         m.insert(id, rect);
@@ -357,4 +368,102 @@ pub fn spotlight<'a>(
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/* ═════════════════ 纯状态机（headless 单测） ═════════════════ */
+
+/// 引导动作，与 `HomeMessage` 一一对应但不持有任何 UI / App 状态。
+///
+/// iced 0.14 没有官方 kittest / headless GUI 测试框架，把状态转移抽成纯函数
+/// 是唯一能自动化回归引导流程的方式；`page_home::update` 只负责写回 App
+/// 与持久化副作用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Start,
+    Prev,
+    Next,
+    Goto(usize),
+    Skip,
+    Never,
+}
+
+/// 纯状态转移。
+///
+/// 返回 `(新步, 是否应写入 guide_done)`；`step == None` 表示引导未开启。
+/// `total` 为步骤总数（由调用方传 `GUIDE_STEPS.len()`）。
+pub fn transition(step: Option<usize>, action: Action, total: usize) -> (Option<usize>, bool) {
+    let last = total.saturating_sub(1);
+    match action {
+        Action::Start => (Some(0), false),
+        Action::Prev => (step.map(|s| s.saturating_sub(1)), false),
+        Action::Next => match step {
+            Some(s) if s + 1 < total => (Some(s + 1), false),
+            Some(_) => (None, true), // 末步「完成」：关闭并持久化
+            None => (None, false),   // 未开启时忽略，绝不误写 guide_done
+        },
+        Action::Goto(i) => (Some(i.min(last)), false),
+        Action::Skip => (None, false), // 仅关闭，下次进首页仍会再弹
+        Action::Never => (None, true), // 关闭并持久化「不再显示」
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{transition, Action};
+
+    const TOTAL: usize = 4;
+
+    #[test]
+    fn start_opens_first_step() {
+        assert_eq!(transition(None, Action::Start, TOTAL), (Some(0), false));
+        // 手动重开：即使在最后一步也回到第 0 步
+        assert_eq!(transition(Some(3), Action::Start, TOTAL), (Some(0), false));
+    }
+
+    #[test]
+    fn prev_clamps_at_zero() {
+        assert_eq!(transition(Some(0), Action::Prev, TOTAL), (Some(0), false));
+        assert_eq!(transition(Some(3), Action::Prev, TOTAL), (Some(2), false));
+        assert_eq!(transition(None, Action::Prev, TOTAL), (None, false));
+    }
+
+    #[test]
+    fn next_walks_every_step_then_finishes() {
+        let mut step = None;
+        step = transition(step, Action::Start, TOTAL).0;
+        assert_eq!(step, Some(0));
+        for expected in 1..TOTAL {
+            let (next, done) = transition(step, Action::Next, TOTAL);
+            assert_eq!(next, Some(expected));
+            assert!(!done, "非末步不应写 guide_done");
+            step = next;
+        }
+        assert_eq!(transition(step, Action::Next, TOTAL), (None, true));
+    }
+
+    #[test]
+    fn next_when_closed_is_ignored_without_persisting() {
+        // 回归：旧实现在 step=None 时收到 GuideNext 也会把 guide_done 置 true，
+        // 会让用户以后再也看不到引导。
+        assert_eq!(transition(None, Action::Next, TOTAL), (None, false));
+    }
+
+    #[test]
+    fn goto_clamps_out_of_range() {
+        assert_eq!(transition(None, Action::Goto(2), TOTAL), (Some(2), false));
+        assert_eq!(transition(None, Action::Goto(99), TOTAL), (Some(3), false));
+        assert_eq!(transition(None, Action::Goto(0), 0), (Some(0), false));
+    }
+
+    #[test]
+    fn skip_only_closes_but_never_closes_and_persists() {
+        assert_eq!(transition(Some(2), Action::Skip, TOTAL), (None, false));
+        assert_eq!(transition(Some(2), Action::Never, TOTAL), (None, true));
+    }
+
+    #[test]
+    fn zero_total_does_not_panic() {
+        assert_eq!(transition(None, Action::Goto(5), 0), (Some(0), false));
+        assert_eq!(transition(Some(0), Action::Next, 0), (None, true));
+    }
 }

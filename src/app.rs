@@ -893,19 +893,27 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
                 ui::page_about::load_markdown(app);
             }
             // 首次进入首页：自动弹出分步新手引导（完成 /「不再显示」后不再打扰）。
-            // 注意不能同帧置 Some(0)：聚焦洞坐标取自上一帧 draw 记录的 bounds，
-            // 切页首帧还没有数据（会退化成「全屏压暗 + 气泡顶部居中」的兜底
-            // 形态，且静态 UI 不再重绘就一直停留）。延迟一拍再开，首帧渲染
-            // 完成后 bounds 已注册，洞与气泡直接就位。
+            // 聚焦洞取自上一帧 draw 注册的 bounds，切页首帧还没有数据；固定
+            // sleep 在慢机器上不够，改为轮询等首帧注册完成（10 × 60ms 上限），
+            // 否则会退化成「全屏压暗 + 气泡顶部居中」且静态 UI 不再重绘而永久停留。
             if page == Page::Home && !app.config.guide_done && app.guide_step.is_none() {
                 return Task::perform(
-                    async { tokio::time::sleep(std::time::Duration::from_millis(120)).await },
+                    async {
+                        for _ in 0..10 {
+                            if ui::guide::bounds(ui::guide::Target::StartCard).is_some() {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                        }
+                    },
                     |()| Message::Home(crate::message::HomeMessage::StartGuide),
                 );
             }
-            // 离开首页即收起引导（回到首页且未标记完成时会再次自动弹出）
+            // 离开首页即收起引导，并清空过期的目标坐标（窗口 resize / DPI
+            // 变化后未重新 draw 的首页若沿用旧绝对坐标会画错洞位置）。
             if page != Page::Home {
                 app.guide_step = None;
+                ui::guide::clear();
             }
             Task::none()
         }
