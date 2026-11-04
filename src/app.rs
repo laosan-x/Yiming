@@ -190,6 +190,12 @@ pub struct WorkState {
     pub fields: std::sync::Arc<std::sync::Mutex<crate::core::matting::FieldCache>>,
     /// 蒙版重算序列号：防抖到期后只采纳最新一次
     pub recompute_seq: u64,
+    /// 防抖序列号：滑块每次变化自增，只有最后一次的定时器允许触发重算
+    pub debounce_seq: u64,
+    /// 导出进行中（fit_export + 编码在后台线程，期间禁用导出按钮防重入）
+    pub exporting: bool,
+    /// 导出序列号：换图 / 重复导出后丢弃过期的后台编码结果
+    pub export_seq: u64,
     /// 图片载入中（解码阶段；busy = 抠图阶段）——驱动载入遮罩
     pub loading: bool,
     /// 旋转 spinner 帧计数（时间订阅驱动，仅载入/处理期间递增）
@@ -197,12 +203,16 @@ pub struct WorkState {
     /// 重算取消令牌：高频拖动滑块时新请求使旧后台线程提前退出（防线程堆积）
     pub matte_cancel_tx: tokio::sync::watch::Sender<u64>,
     pub matte_cancel_rx: tokio::sync::watch::Receiver<u64>,
-    pub result: Option<RgbaImage>,
+    /// 抠图结果（Arc：导出把像素交给后台线程时零拷贝共享，UI 线程不再深拷贝整图）
+    pub result: Option<std::sync::Arc<RgbaImage>>,
     pub mask: Option<Vec<u8>>,
     pub base: Option<Vec<u8>>,
-    /// iced 图像句柄（供 canvas 绘制）
+    /// iced 图像句柄（供 canvas 绘制）：full 层用于 zoom>=1，preview 层用于缩小视图
     pub result_handle: Option<Handle>,
     pub orig_handle: Option<Handle>,
+    /// 视口降采样预览层（G2）：zoom<1 时改传它，GPU 每帧上传量按面积锐减
+    pub result_preview: Option<Handle>,
+    pub orig_preview: Option<Handle>,
     pub stem: String,
     pub src_path: Option<PathBuf>,
 
@@ -268,6 +278,9 @@ impl Default for WorkState {
                 crate::core::matting::FieldCache::default(),
             )),
             recompute_seq: 0,
+            debounce_seq: 0,
+            exporting: false,
+            export_seq: 0,
             loading: false,
             frame: 0.0,
             matte_cancel_tx,
@@ -277,6 +290,8 @@ impl Default for WorkState {
             base: None,
             result_handle: None,
             orig_handle: None,
+            result_preview: None,
+            orig_preview: None,
             stem: "image".into(),
             src_path: None,
             stage: (920.0, 620.0),
@@ -1308,7 +1323,7 @@ pub fn subscription(app: &App) -> iced::Subscription<Message> {
     });
 
     // 旋转 spinner 驱动：仅载入/处理期间激活（空闲时订阅不存在，零开销）
-    let spinner = if app.work.loading || app.work.busy || app.id.loading || app.id.busy {
+    let spinner = if app.work.loading || app.work.busy || app.work.exporting || app.id.loading || app.id.busy {
         iced::time::every(std::time::Duration::from_millis(50)).map(|_| Message::SpinnerTick)
     } else {
         iced::Subscription::none()

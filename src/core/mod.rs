@@ -9,4 +9,5 @@ pub mod image;
 pub mod matting;
 pub mod nn;
 pub mod notify;
+pub mod pyramid;
 pub mod updater;

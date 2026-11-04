@@ -176,6 +176,8 @@
   "模型目录": "Models directory",
   "欢迎使用壹鸣 · 拖入图片即可开始": "Welcome to Yiming · drop an image to begin",
   "正在下载更新": "Downloading update",
+  "正在导出…": "Exporting…",
+  "编码线程异常退出": "Encoder thread exited unexpectedly",
   "正在抠图…": "Matting…",
   "正在检查…": "Checking…",
   "正在检查更新": "Checking for updates",

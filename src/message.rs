@@ -8,6 +8,7 @@ use crate::core::idphoto::RenderMode;
 use crate::core::i18n::tr;
 use crate::core::image::{ExportFormat, ExportSize};
 use crate::core::matting::SampleMode;
+use crate::core::pyramid::PyramidBytes;
 use crate::core::updater::{CheckOutcome, DownloadEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -239,8 +240,10 @@ pub enum ParamKind {
 
 #[derive(Debug, Clone)]
 pub enum WorkMessage {
-    /// 防抖到期，真正触发蒙版重算（滑块拖动期间只更新状态值）
-    RecomputeNow,
+    /// 防抖到期，真正触发蒙版重算（滑块拖动期间只更新状态值）。
+    /// 携带排定时的防抖序列号：拖动过程中排出的过期定时器一律丢弃，
+    /// 避免它们各自启动一次后台重算、白占线程池并推进取消令牌。
+    RecomputeNow(u64),
     /// 打开图片（弹原生对话框）
     OpenImage,
     /// 打开批量图片
@@ -260,7 +263,9 @@ pub enum WorkMessage {
     /// `seq` 用于丢弃过期帧：连续涂抹会并发提交多次合成，只有序号与当前
     /// `WorkState.refresh_seq` 一致的那一次才被采纳，避免旧结果覆盖新参数
     /// （设计同 `IdMessage::RenderDone` 的防乱序载荷）。
-    ResultCommitted(Result<(u64, Box<image::RgbaImage>), String>),
+    /// 载荷第三个元素是后台生成的两级显示字节（preview/full），
+    /// UI 线程只转成 Handle，不做 resize / 整图拷贝。
+    ResultCommitted(Result<(u64, Box<image::RgbaImage>, Box<PyramidBytes>), String>),
     /// 换工具
     SetTool(Tool),
     /// 改参数（滑块 / 开关）
@@ -303,6 +308,9 @@ pub enum WorkMessage {
     SetFormat(ExportFormat),
     SetExportSize(ExportSize),
     Export,
+    /// 后台线程完成 fit_export + 编码后回传（name, 编码字节）。
+    /// `seq` 用于丢弃过期结果；`Box` 避免大 Vec 撑大整个 Message 枚举。
+    ExportPrepared(u64, Result<Box<(String, Vec<u8>)>, String>),
     Exported(Result<String, String>),
     /// 破坏性编辑
     ResetMask,
@@ -375,6 +383,8 @@ pub struct LoadedPayload {
     pub rgba: image::RgbaImage,
     pub path: Option<PathBuf>,
     pub stem: String,
+    /// 工作台载入时由后台线程生成的两级显示字节；证件照页链路为 `None`
+    pub display: Option<Box<PyramidBytes>>,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +392,8 @@ pub struct MaskPayload {
     pub mask: Vec<u8>,
     pub base: Vec<u8>,
     pub result: image::RgbaImage,
+    /// 两级显示字节，在后台线程连同抠图一起生成
+    pub display: Box<PyramidBytes>,
     pub fg_count: usize,
     pub holes: usize,
     pub elapsed_ms: f32,

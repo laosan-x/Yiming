@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 
-use iced::widget::image::Handle;
 use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, stack, text, Space};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::{Alignment, Element, Length, Size, Task};
@@ -14,6 +13,7 @@ use crate::app::{App, Drag, WorkState};
 use crate::core::history::Snapshot;
 use crate::core::image::{self as img, ExportFormat, ExportSize, LoadedImage};
 use crate::core::matting::{self, MaskResult, MatteParams, SampleMode};
+use crate::core::pyramid::{self as pyramid, Level, PyramidBytes};
 use crate::message::*;
 use crate::theme::*;
 use crate::ui::canvas_view::{self as cv, HANDLE_HIT, Rect, StageKind, StageView};
@@ -41,6 +41,40 @@ fn stage_dest(app: &App, bounds: (f32, f32)) -> iced::Rectangle {
     )
 }
 
+/* ═════════════════ 显示金字塔（G2/G3） ═════════════════ */
+
+/// 关键路径耗时打点：`COCOLE_PERF=1` 时输出到 stderr。
+/// 全程本地、无遥测；用于量化「异步是否真的搬离 UI 线程」与优化收益。
+fn perf_log(stage: &str, t0: std::time::Instant) {
+    if std::env::var_os("COCOLE_PERF").is_some() {
+        eprintln!("[perf] {} {:.1}ms", stage, t0.elapsed().as_secs_f32() * 1000.0);
+    }
+}
+
+/// 画布可视区长边（逻辑像素），用于计算预览层目标尺寸
+fn viewport_long(w: &WorkState) -> f32 {
+    w.stage.0.max(w.stage.1).max(320.0)
+}
+
+/// 把后台生成的两级显示字节转成 UI 句柄。
+/// 字节是 move 进来的，这里只做 `Handle::from_rgba` 包装（O(1)），
+/// 不在 UI 线程做 resize 或整图深拷贝。
+fn set_result_handles(w: &mut WorkState, display: PyramidBytes) {
+    let (full, preview) = display.into_handles();
+    w.result_handle = Some(full);
+    w.result_preview = preview;
+}
+
+/// 载入 / 旋转 / 裁剪 / 撤销后刷新原图层句柄。
+/// 这些是低频操作（本身已含整图变换），直接用 `tex_display` 生成 full 层，
+/// 并同步生成一次预览层；缩放高频路径因此永远不再触碰全分辨率纹理。
+fn set_orig_handles(w: &mut WorkState, img: &image::RgbaImage) {
+    let p = pyramid::build(img, viewport_long(w));
+    let (full, preview) = p.into_handles();
+    w.orig_handle = Some(full);
+    w.orig_preview = preview;
+}
+
 /* ═════════════════ 异步小工具 ═════════════════ */
 
 /// 把阻塞工作丢到 tokio 阻塞线程池，完成后映射成 Message。
@@ -59,13 +93,25 @@ where
     )
 }
 
-/// 后台读图（文件对话框与命令行参数共用同一条链路）
-fn load_task(path: PathBuf) -> Task<Message> {
+/// 后台读图（文件对话框与命令行参数共用同一条链路）。
+/// 解码 + 显示金字塔同批在后台完成，UI 线程不再为大图做 resize / 整图拷贝。
+fn load_task(path: PathBuf, viewport: f32) -> Task<Message> {
     blocking_task(
-        move || img::load_file(&path).map_err(|e| e.to_string()),
+        move || {
+            let t0 = std::time::Instant::now();
+            img::load_file(&path)
+                .map(|l| {
+                    let display = Box::new(pyramid::build(&l.rgba, viewport));
+                    perf_log("decode+pyramid", t0);
+                    let mut p = to_payload(l);
+                    p.display = Some(display);
+                    p
+                })
+                .map_err(|e| e.to_string())
+        },
         |r| {
             Message::Work(WorkMessage::ImageLoaded(match r {
-                Some(Ok(l)) => Ok(Box::new(to_payload(l))),
+                Some(Ok(p)) => Ok(Box::new(p)),
                 Some(Err(e)) => Err(e),
                 None => Err(tr("读取线程异常退出").to_string()),
             }))
@@ -113,11 +159,11 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         WorkMessage::FilePicked(None) => return Task::none(),
         WorkMessage::FilePicked(Some(path)) => {
             app.work.loading = true;
-            return load_task(path);
+            return load_task(path, viewport_long(&app.work));
         }
         WorkMessage::OpenPath(path) => {
             app.work.loading = true;
-            return load_task(path);
+            return load_task(path, viewport_long(&app.work));
         }
         WorkMessage::FilesPicked(paths) => {
             // 去重：已在队列里的路径跳过
@@ -139,9 +185,12 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             app.toast(trf("已加入 {} 张到批量队列{}", &[&added.to_string(), &dup_note]));
             return Task::none();
         }
-        WorkMessage::ImageLoaded(Ok(payload)) => {
+        WorkMessage::ImageLoaded(Ok(mut payload)) => {
             app.work.loading = false;
-            app.work.src = Some(std::sync::Arc::new(payload.rgba.clone()));
+            // 换图：作废仍在后台编码的旧导出（结果回传时 seq 不匹配会被丢弃），
+            // 同时复位忙碌标志，避免旧任务被丢弃后按钮永久禁用
+            app.work.export_seq = app.work.export_seq.wrapping_add(1);
+            app.work.exporting = false;
             app.work.stem = payload.stem.clone();
             *app.work.fields.lock().unwrap_or_else(|p| p.into_inner()) = matting::FieldCache::default();
             app.work.src_path = payload.path.clone();
@@ -149,12 +198,22 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                 app.config.push_recent(&p.to_string_lossy(), &payload.stem);
             }
             let (iw, ih) = (payload.rgba.width(), payload.rgba.height());
-            let t = img::tex_display(&payload.rgba);
-            app.work.orig_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
+            if let Some(display) = payload.display.take() {
+                // 后台已生成两级字节，这里只做 Handle 包装（O(1)）
+                let (full, preview) = display.into_handles();
+                app.work.orig_handle = Some(full);
+                app.work.orig_preview = preview;
+            } else {
+                // 兜底：其他链路转发的 payload 未携带显示字节
+                set_orig_handles(&mut app.work, &payload.rgba);
+            }
+            // 原图直接 move 进 Arc（零拷贝），不再额外 clone 一份 48MB 像素
+            app.work.src = Some(std::sync::Arc::new(payload.rgba));
             app.work.mask = None;
             app.work.base = None;
             app.work.result = None;
             app.work.result_handle = None;
+            app.work.result_preview = None;
             app.work.history.clear();
             app.work.rot_total = 0.0;
             app.work.rot_deg = 0.0;
@@ -182,11 +241,10 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             app.work.busy = false;
             app.work.metrics = crate::app::Metrics { elapsed_ms, fg_ratio, w: iw, h: ih, holes };
             app.work.last_bg = bg;
-            // 结果图必须同时刷新 GPU 句柄，否则画布只有棋盘格、看不到抠图结果。
-            // 这里只克隆一份像素给 iced（其余字段直接 move，避免整图多次深拷贝）。
-            let t = img::tex_display(&payload.result);
-            app.work.result_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
-            app.work.result = Some(payload.result);
+            // 结果句柄直接用后台线程生成的两级显示字节（UI 线程零 resize）；
+            // 全分辨率像素只保留 Arc 一份，供导出使用。
+            set_result_handles(&mut app.work, *payload.display);
+            app.work.result = Some(std::sync::Arc::new(payload.result));
             app.work.mask = Some(payload.mask);
             app.work.base = Some(payload.base);
             // 抠图完成后自动切换到结果视图
@@ -219,24 +277,32 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             }
             return Task::none();
         }
-        WorkMessage::RecomputeNow => {
-            if app.work.src.is_some() && app.config.auto {
-                return recompute(app);
+        WorkMessage::RecomputeNow(seq) => {
+            // G4：只放行最后一次防抖请求。拖动滑块会排出多个定时器，
+            // 旧定时器到期时必须直接丢弃，否则每个都会进 spawn_blocking
+            // 并推进取消令牌，白白抢占线程池与推理闸门。
+            if seq != app.work.debounce_seq || app.work.src.is_none() || !app.config.auto {
+                return Task::none();
             }
-            return Task::none();
+            if app.work.busy {
+                // 上一轮抠图还在跑：顺延一拍重试（seq 不变，仍是最新请求）
+                return Task::perform(
+                    tokio::time::sleep(std::time::Duration::from_millis(PARAM_DEBOUNCE_MS)),
+                    move |_| Message::Work(WorkMessage::RecomputeNow(seq)),
+                );
+            }
+            return recompute(app);
         }
         // ── 画笔 / 橡皮擦松手后的异步合成回传 ──
         // 后台线程已完成 apply_mask + 去色晕 + 像素深拷贝，UI 线程在这里只做
         // 「换句柄」这一步；纹理上传由画布层的 Allocation 预上传机制兜底
         // （见 canvas_view.rs 的 ensure_image_alloc），当帧即可绘制、不闪跳。
-        WorkMessage::ResultCommitted(Ok((seq, fg))) => {
+        WorkMessage::ResultCommitted(Ok((seq, fg, display))) => {
             // 只采纳最新一次提交：连续涂抹会并发发起多次合成，序号落后的
             // 一律丢弃，避免旧蒙版的结果覆盖新蒙版（参考 RenderDone 防乱序）。
             if seq == app.work.refresh_seq {
-                let _ = (fg.width(), fg.height());
-                let t = img::tex_display(&fg);
-                app.work.result_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
-                app.work.result = Some(*fg);
+                set_result_handles(&mut app.work, *display);
+                app.work.result = Some(std::sync::Arc::new(*fg));
             }
             return Task::none();
         }
@@ -449,31 +515,67 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             app.persist();
         }
         WorkMessage::Export => {
-            let Some(result) = app.work.result.clone() else {
+            if app.work.result.is_none() {
                 app.toast(tr("还没有可导出的结果"));
+                return Task::none();
+            }
+            // 处理中禁用：抠图未结束或已有导出在跑时忽略，防重复提交
+            if app.work.busy || app.work.exporting {
+                return Task::none();
+            }
+            let Some(result) = app.work.result.clone() else {
                 return Task::none();
             };
             let bg = out_bg_rgb(&app.work.out_color);
             let size = app.config.export_size();
             let fmt = app.config.export_format();
             let name = img::export_name(&app.work.stem, fmt);
-            let fitted = img::fit_export(&result, size, bg);
-            let (iw, ih) = (fitted.width(), fitted.height());
-            let bytes = fitted.as_raw().clone();
-            let encoded = encode_in_memory(&fitted, fmt, bg);
-            return match encoded {
-                Ok(bytes) => Task::perform(pick_save(name.clone(), bytes), move |p| {
-                    Message::Work(WorkMessage::Exported(match p {
-                        Some(path) => Ok(path.to_string_lossy().to_string()),
-                        None => Err(tr("已取消").to_string()),
-                    }))
-                }),
+            app.work.export_seq += 1;
+            let seq = app.work.export_seq;
+            app.work.exporting = true;
+            // G1：fit_export + flatten + PNG/WebP 编码整体搬离 UI 线程。
+            // 大图这几步要数百毫秒到数秒，留在 update() 会冻结整个界面；
+            // result 是 Arc，clone 零拷贝，不在 UI 线程复制 48MB 像素。
+            return blocking_task(
+                move || {
+                    let t0 = std::time::Instant::now();
+                    let fitted = img::fit_export(&result, size, bg);
+                    let out = encode_in_memory(&fitted, fmt, bg)
+                        .map(|bytes| Box::new((name, bytes)))
+                        .map_err(|e| trf("编码失败：{}", &[&e]));
+                    perf_log("fit_export+encode", t0);
+                    out
+                },
+                move |r| {
+                    Message::Work(WorkMessage::ExportPrepared(
+                        seq,
+                        match r {
+                            Some(v) => v,
+                            None => Err(tr("编码线程异常退出").to_string()),
+                        },
+                    ))
+                },
+            );
+        }
+        WorkMessage::ExportPrepared(seq, payload) => {
+            // 换图 / 重复导出后旧结果作废
+            if seq != app.work.export_seq {
+                return Task::none();
+            }
+            app.work.exporting = false;
+            let (name, bytes) = match payload {
+                Ok(v) => *v,
                 Err(e) => {
-                    app.toast_err(trf("编码失败：{}", &[&e]));
-                    let _ = (iw, ih, bytes);
-                    Task::none()
+                    app.toast_err(e);
+                    return Task::none();
                 }
             };
+            return Task::perform(pick_save(name, bytes), |p| {
+                Message::Work(WorkMessage::Exported(match p {
+                    Some(path) => Ok(path.to_string_lossy().to_string()),
+                    None => Err(tr("已取消").to_string()),
+                }))
+            });
         }
         WorkMessage::Exported(Ok(path)) => {
             app.toast(trf("已导出 {}", &[&path]));
@@ -517,12 +619,12 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             app.work.src = Some(std::sync::Arc::clone(&rotated));
             *app.work.fields.lock().unwrap_or_else(|p| p.into_inner()) = matting::FieldCache::default();
             app.work.rot_total = (app.work.rot_total + if cw { 90.0 } else { -90.0 }) % 360.0;
-            let t = img::tex_display(&rotated);
-            app.work.orig_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
+            set_orig_handles(&mut app.work, &rotated);
             app.work.mask = None;
             app.work.base = None;
             app.work.result = None;
             app.work.result_handle = None;
+            app.work.result_preview = None;
             fit_to_window(&mut app.work);
             return recompute(app);
         }
@@ -551,13 +653,13 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
             *app.work.fields.lock().unwrap_or_else(|p| p.into_inner()) = matting::FieldCache::default();
             app.work.rot_total += deg;
             app.work.rot_deg = 0.0;
-            let t = img::tex_display(&rotated);
-            app.work.orig_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
+            set_orig_handles(&mut app.work, &rotated);
             // 源图尺寸变了，蒙版必须重算
             app.work.mask = None;
             app.work.base = None;
             app.work.result = None;
             app.work.result_handle = None;
+            app.work.result_preview = None;
             fit_to_window(&mut app.work);
             app.toast(trf("已旋转 {}°", &[&format!("{:.1}", deg)]));
             return recompute(app);
@@ -1069,7 +1171,7 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
 /* ═════════════════ 内部逻辑 ═════════════════ */
 
 fn to_payload(l: LoadedImage) -> LoadedPayload {
-    LoadedPayload { rgba: l.rgba, path: l.path, stem: l.stem }
+    LoadedPayload { rgba: l.rgba, path: l.path, stem: l.stem, display: None }
 }
 
 fn parse_hex_rgb(s: &str) -> Option<[u8; 3]> {
@@ -1104,9 +1206,11 @@ fn request_recompute(app: &mut App) -> Task<Message> {
     if app.work.src.is_none() {
         return Task::none();
     }
+    app.work.debounce_seq += 1;
+    let seq = app.work.debounce_seq;
     Task::perform(
         tokio::time::sleep(std::time::Duration::from_millis(PARAM_DEBOUNCE_MS)),
-        |_| Message::Work(WorkMessage::RecomputeNow),
+        move |_| Message::Work(WorkMessage::RecomputeNow(seq)),
     )
 }
 
@@ -1119,6 +1223,8 @@ fn recompute(app: &mut App) -> Task<Message> {
     let Some(src) = app.work.src.clone() else {
         return Task::none();
     };
+    // 视口尺寸在调度时固定，后台线程据此生成显示金字塔（不占 UI 线程）
+    let viewport = viewport_long(&app.work);
     // 序列号 + 取消令牌：高频拖动滑块时新请求使旧后台线程提前退出
     app.work.recompute_seq += 1;
     let seq = app.work.recompute_seq;
@@ -1133,6 +1239,7 @@ fn recompute(app: &mut App) -> Task<Message> {
     let fields = app.work.fields.clone();
     blocking_task(
         move || {
+            let job_t0 = std::time::Instant::now();
             if *cancel_rx.borrow() > seq {
                 return Err(tr("已取消").to_string());
             }
@@ -1169,9 +1276,11 @@ fn recompute(app: &mut App) -> Task<Message> {
                 let fg = img::apply_mask(&src, &mask);
                 // base = 当前蒙版快照：画笔「恢复原始」行为与色键路径一致
                 let fg_count = mask.iter().filter(|&&v| v > 127).count();
+                perf_log("nn_matte+display", job_t0);
                 return Ok(Box::new(MaskPayload {
                     base: mask.clone(),
                     mask,
+                    display: Box::new(pyramid::build(&fg, viewport)),
                     result: fg,
                     fg_count,
                     holes: 0,
@@ -1184,12 +1293,24 @@ fn recompute(app: &mut App) -> Task<Message> {
                 return Err(tr("已取消").to_string());
             }
             let mut cache = fields.lock().unwrap_or_else(|p| p.into_inner());
-            let res: MaskResult = matting::compute_mask(src.as_raw(), w, h, &params, &mut cache);
+            // G4：把取消令牌传进计算循环（连通域 BFS / 羽化 / 形态学各阶段
+            // 都会检查），长任务不再「只能等跑完」，换图或拖滑块能真正中止。
+            let res: MaskResult = matting::compute_mask_cancellable(
+                src.as_raw(),
+                w,
+                h,
+                &params,
+                &mut cache,
+                &|| *cancel_rx.borrow() > seq,
+            )
+            .ok_or_else(|| tr("已取消").to_string())?;
             let mut fg = img::apply_mask(&src, &res.mask);
             defringe_img(&mut fg, &res.mask, w, h, defringe);
+            perf_log("matte+display", job_t0);
             Ok(Box::new(MaskPayload {
                 mask: res.mask,
                 base: res.base,
+                display: Box::new(pyramid::build(&fg, viewport)),
                 result: fg,
                 fg_count: res.fg_count,
                 holes: res.holes_filled,
@@ -1233,10 +1354,12 @@ fn refresh_result_async(app: &mut App) -> Task<Message> {
         return Task::none();
     };
     let defringe = app.work.params.defringe;
+    let viewport = viewport_long(&app.work);
     app.work.refresh_seq += 1;
     let seq = app.work.refresh_seq;
     blocking_task(
         move || {
+            let job_t0 = std::time::Instant::now();
             let mut fg = img::apply_mask(&src, &mask);
             defringe_img(
                 &mut fg,
@@ -1245,11 +1368,14 @@ fn refresh_result_async(app: &mut App) -> Task<Message> {
                 src.height() as usize,
                 defringe,
             );
-            fg
+            // 显示金字塔与合成同批在后台生成：UI 线程只把字节包成 Handle
+            let display = Box::new(pyramid::build(&fg, viewport));
+            perf_log("composite+pyramid", job_t0);
+            (fg, display)
         },
         move |r| {
             Message::Work(WorkMessage::ResultCommitted(match r {
-                Some(fg) => Ok((seq, Box::new(fg))),
+                Some((fg, display)) => Ok((seq, Box::new(fg), display)),
                 None => Err(tr("合成线程异常退出").to_string()),
             }))
         },
@@ -1441,12 +1567,12 @@ fn crop_confirm(app: &mut App) -> Task<Message> {
     let (nw, nh) = (cut.width(), cut.height());
     w.src = Some(std::sync::Arc::new(cut.clone()));
     *w.fields.lock().unwrap_or_else(|p| p.into_inner()) = matting::FieldCache::default();
-    let t = img::tex_display(&cut);
-    w.orig_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
+    set_orig_handles(w, &cut);
     w.mask = None;
     w.base = None;
     w.result = None;
     w.result_handle = None;
+    w.result_preview = None;
     w.crop = None;
     w.tool = Tool::Auto;
     w.pan = (0.0, 0.0);
@@ -1459,8 +1585,7 @@ fn crop_confirm(app: &mut App) -> Task<Message> {
 fn undo(app: &mut App) -> bool {
     let Some(snap) = app.work.history.pop() else { return false };
     app.work.src = Some(snap.src.clone());
-    let t = img::tex_display(&snap.src);
-    app.work.orig_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
+    set_orig_handles(&mut app.work, &snap.src);
     app.work.mask = Some(snap.mask.clone());
     app.work.base = Some(snap.mask_base.clone());
     app.work.rot_total = snap.rot_total;
@@ -1602,6 +1727,18 @@ fn batch_export_stream(
 pub fn view(app: &App) -> Element<'_, Message> {
     let w = &app.work;
 
+    // G2：按 zoom 选显示层。缩小视图用双线性预降采样的 preview 层
+    // （GPU 上传量按面积锐减），放大到 >=100% 时切回全分辨率看细节。
+    // 纯函数 + 只读，不含状态写入；低频路径无 preview 时自动回退 full。
+    let result_h = match pyramid::select(w.zoom, w.result_preview.is_some()) {
+        Level::Preview => w.result_preview.as_ref(),
+        Level::Full => w.result_handle.as_ref(),
+    };
+    let original_h = match pyramid::select(w.zoom, w.orig_preview.is_some()) {
+        Level::Preview => w.orig_preview.as_ref(),
+        Level::Full => w.orig_handle.as_ref(),
+    };
+
     // ── 顶部工具条 ──
     let has_img = w.src.is_some();
     // 看图模式（对比/原图）下编辑类工具置灰（移动 / 智能抠图不受影响）
@@ -1623,7 +1760,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 "wand",
                 tr("智能抠图（自动）"),
                 w.tool == Tool::Auto,
-                has_img && !w.busy,
+                has_img && !w.busy && !w.exporting,
                 Some(Message::Work(WorkMessage::DoMatte)),
             ),
             rail_div(),
@@ -1685,7 +1822,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .height(Length::Fixed(34.0))
                 .padding(pad(0.0, 15.0, 0.0, 15.0))
                 .style(btn_primary),
-                has_img && w.result.is_some() && !w.busy,
+                has_img && w.result.is_some() && !w.busy && !w.exporting,
                 Message::Work(WorkMessage::Export),
             ),
         ]
@@ -1720,8 +1857,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         cv::stage_canvas(
             StageView {
                 geom,
-                result: w.result_handle.as_ref(),
-                original: w.orig_handle.as_ref(),
+                result: result_h,
+                original: original_h,
                 kind,
                 compare_at: w.compare_at,
                 backdrop: match w.bg_preview {
@@ -1755,9 +1892,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
         )
     };
     // 画布区域：载入/处理中时，加载动画只在画布内居中显示
-    let stage_area: Element<'_, Message> = if w.busy || w.loading {
+    let stage_area: Element<'_, Message> = if w.busy || w.loading || w.exporting {
         let (t, sub): (&'static str, &'static str) = if w.loading {
             (tr("正在载入图片…"), "")
+        } else if w.exporting {
+            (tr("正在导出…"), "")
         } else {
             (tr("正在抠图…"), "SmartMatte")
         };

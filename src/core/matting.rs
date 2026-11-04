@@ -189,6 +189,9 @@ pub fn compute_dist(data: &[u8], w: usize, h: usize, bg: [u8; 3]) -> Vec<f32> {
 
 /// 单趟 mask 计算。`dist` 由外部传入并复用，自适应多趟不再各自重算。
 #[allow(clippy::too_many_arguments)] // 与 JS 版 passMask 参数一一对应（逐像素对齐口径）
+/// 单趟蒙版计算（无取消检查版）。生产链路走 `pass_mask_cancellable`，
+/// 这里保留公开算法 API 供基准/诊断脚本与单测对照使用。
+#[allow(dead_code)]
 pub fn pass_mask(
     w: usize,
     h: usize,
@@ -199,13 +202,51 @@ pub fn pass_mask(
     key_all: bool,
     dist: &[f32],
 ) -> Vec<u8> {
+    pass_mask_impl(w, h, t, f, edge_t, grad, key_all, dist, None)
+        .expect("uncancellable pass cannot be cancelled")
+}
+
+/// 带取消回调的 pass_mask：回调返回 true 时立即放弃本次计算（G4）。
+// 算法内核的 8 个几何/参数项全都会被用到，拆成配置结构只会让逐像素热路径
+// 多一层间接寻址；这里按项目约定显式豁免 too_many_arguments。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pass_mask_cancellable(
+    w: usize,
+    h: usize,
+    t: f32,
+    f: f32,
+    edge_t: f32,
+    grad: &[f32],
+    key_all: bool,
+    dist: &[f32],
+    cancel: &dyn Fn() -> bool,
+) -> Option<Vec<u8>> {
+    pass_mask_impl(w, h, t, f, edge_t, grad, key_all, dist, Some(cancel))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pass_mask_impl(
+    w: usize,
+    h: usize,
+    t: f32,
+    f: f32,
+    edge_t: f32,
+    grad: &[f32],
+    key_all: bool,
+    dist: &[f32],
+    cancel: Option<&dyn Fn() -> bool>,
+) -> Option<Vec<u8>> {
     let n = w * h;
+    let is_cancelled = || cancel.map(|f| f()).unwrap_or(false);
     let mut alpha = vec![0u8; n];
     let lo = t - f * 0.5;
     let hi = t + f * 0.5;
     let hard = t + f * 0.5;
 
     // 背景似然：颜色接近 + 非轮廓（全图色键模式下跳过轮廓判定）
+    if is_cancelled() {
+        return None;
+    }
     let is_bg_like: Vec<u8> = (0..n)
         .map(|i| if dist[i] < hard && (key_all || grad[i] < edge_t) { 1 } else { 0 })
         .collect();
@@ -237,6 +278,10 @@ pub fn pass_mask(
             push(y * w + w - 1, &mut visited, &mut queue, &mut qt);
         }
         while qh < qt {
+            // 连通域 BFS 是大图最耗时的一段：每 65536 个像素查一次取消令牌
+            if (qh & 0xFFFF) == 0 && is_cancelled() {
+                return None;
+            }
             let i = queue[qh] as usize;
             qh += 1;
             let x = i % w;
@@ -257,6 +302,9 @@ pub fn pass_mask(
 
     let span = (hi - lo).max(1e-6);
     for i in 0..n {
+        if (i & 0xFFFF) == 0 && is_cancelled() {
+            return None;
+        }
         if visited[i] == 0 {
             alpha[i] = 255; // 被轮廓围住的内部 → 强制保留
         } else {
@@ -270,7 +318,7 @@ pub fn pass_mask(
             };
         }
     }
-    alpha
+    Some(alpha)
 }
 
 pub fn count_fg(mask: &[u8]) -> usize {
@@ -548,8 +596,37 @@ pub fn compute_mask(
     p: &MatteParams,
     cache: &mut FieldCache,
 ) -> MaskResult {
+    compute_mask_impl(data, w, h, p, cache, &|| false)
+        .expect("uncancellable compute cannot be cancelled")
+}
+
+/// 带取消回调的 compute_mask（G4）。与 `compute_mask` 算法完全一致，
+/// 但在各耗时阶段及 `pass_mask` 的 BFS 循环内检查取消令牌；返回 `None`
+/// 表示任务已过期，调用方应静默丢弃结果。
+pub fn compute_mask_cancellable(
+    data: &[u8],
+    w: usize,
+    h: usize,
+    p: &MatteParams,
+    cache: &mut FieldCache,
+    cancel: &dyn Fn() -> bool,
+) -> Option<MaskResult> {
+    compute_mask_impl(data, w, h, p, cache, cancel)
+}
+
+fn compute_mask_impl(
+    data: &[u8],
+    w: usize,
+    h: usize,
+    p: &MatteParams,
+    cache: &mut FieldCache,
+    cancel: &dyn Fn() -> bool,
+) -> Option<MaskResult> {
     let t0 = std::time::Instant::now();
     let n = w * h;
+    if cancel() {
+        return None;
+    }
     let bg = sample_bg(data, w, h, p.sample, p.custom);
 
     let f = (p.feather as f32 / 100.0).max(0.001);
@@ -562,6 +639,9 @@ pub fn compute_mask(
         cache.bg_key = key;
     }
     let dist = cache.dist.clone().expect("just set");
+    if cancel() {
+        return None;
+    }
 
     let key_all = p.sample == SampleMode::Custom && p.key_all;
     let mut alpha = Vec::new();
@@ -569,7 +649,10 @@ pub fn compute_mask(
     let mut edge_t = base_edge;
 
     for _attempt in 0..4 {
-        alpha = pass_mask(w, h, t, f, edge_t, &grad, key_all, &dist);
+        if cancel() {
+            return None;
+        }
+        alpha = pass_mask_cancellable(w, h, t, f, edge_t, &grad, key_all, &dist, cancel)?;
         let fg = alpha.iter().filter(|&&v| v > 128).count();
         let ratio = fg as f32 / n as f32;
         if ratio > 0.004 && ratio < 0.985 {
@@ -606,6 +689,9 @@ pub fn compute_mask(
         }
     }
 
+    if cancel() {
+        return None;
+    }
     // 形态学：收缩(-) / 扩张(+)
     if p.morph != 0 {
         morph_op(&mut alpha, w, h, p.morph);
@@ -616,20 +702,23 @@ pub fn compute_mask(
     } else {
         0
     };
+    if cancel() {
+        return None;
+    }
     // 羽化
     if p.feather > 0 {
         blur_alpha(&mut alpha, w, h, std::cmp::max(1, (p.feather as f32 / 22.0).round() as usize));
     }
 
     let fg_count = count_fg(&alpha);
-    MaskResult {
+    Some(MaskResult {
         mask: alpha.clone(),
         base: alpha,
         bg,
         fg_count,
         holes_filled,
         elapsed_ms: t0.elapsed().as_secs_f32() * 1000.0,
-    }
+    })
 }
 
 /* ═════════════════ 去色晕 Defringe ═════════════════ */
@@ -672,5 +761,61 @@ pub fn defringe(rgba: &mut [u8], mask: &[u8], w: usize, h: usize, strength: i32)
                 rgba[k + c] = to_u8_clamped(v + (t - v) * strength);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+
+    /// 中心深色前景 + 浅色背景，让色键算法有实际像素要处理
+    fn sample_image(w: usize, h: usize) -> Vec<u8> {
+        let mut d = vec![240u8; w * h * 4];
+        for y in (h / 4)..(3 * h / 4) {
+            for x in (w / 4)..(3 * w / 4) {
+                let i = (y * w + x) * 4;
+                d[i] = 30;
+                d[i + 1] = 60;
+                d[i + 2] = 120;
+            }
+        }
+        d
+    }
+
+    #[test]
+    fn cancellation_short_circuits_compute() {
+        let (w, h) = (128, 96);
+        let d = sample_image(w, h);
+        let p = MatteParams::default();
+        let mut cache = FieldCache::default();
+        assert!(compute_mask_cancellable(&d, w, h, &p, &mut cache, &|| true).is_none());
+    }
+
+    #[test]
+    fn no_cancel_matches_original_api() {
+        let (w, h) = (128, 96);
+        let d = sample_image(w, h);
+        let p = MatteParams::default();
+        let a = compute_mask(&d, w, h, &p, &mut FieldCache::default()).mask;
+        let b = compute_mask_cancellable(&d, w, h, &p, &mut FieldCache::default(), &|| false)
+            .expect("not cancelled")
+            .mask;
+        assert_eq!(a, b, "取消版不得改变算法结果");
+    }
+
+    #[test]
+    fn pass_mask_cancel_is_honoured() {
+        let (w, h) = (64, 64);
+        let n = w * h;
+        let grad = vec![0.0f32; n];
+        let dist = vec![0.5f32; n];
+        assert!(
+            pass_mask_cancellable(w, h, 0.5, 0.2, 0.2, &grad, false, &dist, &|| true)
+                .is_none()
+        );
+        let a = pass_mask(w, h, 0.5, 0.2, 0.2, &grad, false, &dist);
+        let b = pass_mask_cancellable(w, h, 0.5, 0.2, 0.2, &grad, false, &dist, &|| false)
+            .expect("not cancelled");
+        assert_eq!(a, b);
     }
 }

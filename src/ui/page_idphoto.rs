@@ -84,6 +84,7 @@ fn matte_payload(app: &App, payload: LoadedPayload) -> Task<Message> {
                 rgba: fg,
                 path: payload.path.clone(),
                 stem: payload.stem.clone(),
+                display: None,
             }))
         },
         |r| {
@@ -627,7 +628,7 @@ fn advance_queue(app: &mut App, ok: bool) -> Task<Message> {
 }
 
 fn to_payload(l: imgcore::LoadedImage) -> LoadedPayload {
-    LoadedPayload { rgba: l.rgba, path: l.path, stem: l.stem }
+    LoadedPayload { rgba: l.rgba, path: l.path, stem: l.stem, display: None }
 }
 
 /// 后台预取解码：批量流水线的解码级（结果进单槽，解码 N+1 ∥ 抠图 N）
