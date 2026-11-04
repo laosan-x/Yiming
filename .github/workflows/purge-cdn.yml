@@ -1,18 +1,19 @@
-# 自动刷新 jsDelivr 边缘缓存。
+# 自动刷新 jsDelivr 边缘缓存并校验生效。
 #
-# 背景：jsDelivr 对 /gh/ 路径有 ~12h 边缘缓存，发版后手动回填
-# update-manifest.json 并 push 到 main 时，CDN 可能仍返回旧清单
-# （旧版本号 → 用户「检查更新」看不到新版本）。本工作流在清单文件
-# 变更推送到 main 后自动 purge，替代原先的手动 SOP 步骤：
-#   curl -X POST https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json
+# 背景：jsDelivr 对 /gh/ 路径有 ~12h 边缘缓存，清单变更 push 到 main 后
+# 必须 purge，否则用户「检查更新」看到的仍是旧版本。
 #
-# purge 是公开 API，无需 token；purge 后再拉一次 CDN 内容回显，
-# 用于在 Actions 日志里确认新版本号已生效。
+# ⚠️ 竞态（v0.4.4 实测踩到）：purge 会让 jsDelivr 重新解析 @main 拉取文件，
+# 但 GitHub 的分支引用在 push 后存在短暂复制延迟——若 purge 时 @main 仍
+# 指向旧 commit，jsDelivr 就会把旧内容重新缓存 12h，且工作流显示 success，
+# 发版者以为生效了。修复：purge 前先用 Contents API 确认 GitHub main 上的
+# blob 已与本次提交一致；purge 后轮询 CDN 比对 version + sha256，
+# 不一致则让工作流失败告警，绝不静默通过。
 #
 # ⚠️ purge 对同一路径有频率限制：短时间内重复 purge 会返回
-# {"throttled": true, "throttlingReset": <秒>}，且 CDN 不刷新，
-# 需等窗口（约 15-20 分钟）过后重试。本工作流每次清单变更只
-# purge 一次，天然不会触发；手动排障时切勿循环重试。
+# {"throttled": true, "throttlingReset": <秒>}，且 CDN 不刷新。
+# 本工作流每次清单变更**只 purge 一次**，手动排障时切勿循环重试；
+# 被限流时直接失败并提示等待窗口，由人工另行处理。
 name: Purge jsDelivr CDN
 
 on:
@@ -21,18 +22,68 @@ on:
     paths: ["update-manifest.json"]
   workflow_dispatch: {}
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   purge:
     runs-on: ubuntu-latest
     steps:
-      - name: Purge manifest cache and verify
+      - uses: actions/checkout@v4
+
+      - name: Wait for GitHub main to serve the pushed manifest
+        shell: bash
         run: |
-          echo "==> Purging jsDelivr cache..."
+          # 用 commit 内的 blob sha 比对，避免工作区换行符转换干扰
+          expected=$(git rev-parse HEAD:update-manifest.json)
+          echo "expected blob: $expected"
+          for i in $(seq 1 12); do
+            remote=$(curl -fsS \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/update-manifest.json?ref=main" \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["sha"])')
+            echo "attempt $i: main blob = $remote"
+            if [ "$remote" = "$expected" ]; then
+              echo "GitHub main in sync"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::GitHub main 未能在 60s 内同步到本次提交，放弃 purge（避免把旧内容重新缓存 12h）"
+          exit 1
+
+      - name: Purge once and verify CDN consistency
+        shell: bash
+        run: |
+          cdn="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
+          expected=$(python3 -c '
+          import json
+          d = json.load(open("update-manifest.json", encoding="utf-8"))
+          p = d["platforms"]["windows-x86_64"]
+          print(d["version"], p["sha256"])
+          ')
+          echo "expected: $expected"
+
           # purge API 仅接受 GET（POST 返回 MethodNotAllowed）
-          curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
-          echo
-          echo "==> CDN now serves:"
-          curl -sS "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json" | head -c 500
-          echo
+          resp=$(curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json")
+          echo "purge response: $resp"
+          if echo "$resp" | grep -q '"throttled": *true'; then
+            echo "::error::jsDelivr purge 被限流；请等 throttlingReset 窗口后手动重试，不要循环 purge"
+            exit 1
+          fi
+
+          for i in $(seq 1 12); do
+            sleep 10
+            actual=$(curl -fsS "$cdn" | python3 -c '
+          import sys, json
+          d = json.load(sys.stdin)
+          p = d["platforms"]["windows-x86_64"]
+          print(d["version"], p["sha256"])
+          ')
+            echo "attempt $i: CDN = $actual"
+            if [ "$actual" = "$expected" ]; then
+              echo "CDN in sync"
+              exit 0
+            fi
+          done
+          echo "::error::purge 后 120s CDN 仍返回旧清单；请人工检查（勿循环 purge）"
+          exit 1

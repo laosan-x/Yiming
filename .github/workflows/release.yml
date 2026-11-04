@@ -1,3 +1,10 @@
+# 发版 SOP（v0.4.5 起）
+#   1. 本地只改：Cargo.toml / README / 设置页 changelog + i18n / release-notes.txt
+#      **不要手改 update-manifest.json**：main 上必须始终是上一版的完整清单，
+#      这样 CI 构建期间旧版客户端只会看到「已是最新」，不会读到 PENDING 摘要。
+#   2. git tag -a vX.Y.Z && git push origin main && git push origin vX.Y.Z
+#   3. 本工作流：门禁 → 构建 → 发布 Release → 从安装包全量生成清单并 push main
+#   4. push main 自动触发 purge-cdn.yml：确认 GitHub 同步后 purge 并校验 CDN
 name: Release
 
 on:
@@ -15,6 +22,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -23,6 +32,14 @@ jobs:
         id: ver
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # ci.yml 只在 push main / PR 时触发，tag push 不触发。发版必须自带门禁，
+      # 否则打错 commit 或测试挂掉仍会照常发布。
+      - name: Gate — cargo test
+        run: cargo test
+
+      - name: Gate — cargo clippy
+        run: cargo clippy --all-targets
 
       - name: cargo build --release
         run: cargo build --release
@@ -80,9 +97,43 @@ jobs:
           files: dist/cocole-iced-v${{ steps.ver.outputs.version }}-setup.exe
           fail_on_unmatched_files: true
 
-      # 发版当刻 main 分支的清单若已提前回填，此步立即刷新 CDN；
-      # 若清单是发版后才回填（常规流程），由 purge-cdn.yml 在 push
-      # 清单变更时自动刷新——两处兜底，确保发版后清单最多分钟级可见。
-      - name: Purge jsDelivr CDN cache
-        # purge API 仅接受 GET（POST 返回 MethodNotAllowed）
-        run: curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/update-manifest.json"
+      # ── 更新清单：CI 全量生成，不再有 PENDING 骨架窗口 ──────────────
+      # main 上的清单在构建期间始终是「上一个已发布版本」的完整清单，
+      # 旧版客户端只会看到「已是最新版本」，不会拿到 PENDING 摘要白下载。
+      # 本步骤产出的 push 会触发 purge-cdn.yml 刷新 CDN 并做一致性校验，
+      # 故这里不再单独 purge（同路径短时间内重复 purge 会被 jsDelivr 限流）。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate full update manifest from built installer
+        shell: bash
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          python scripts/gen_manifest.py \
+            --version "$V" \
+            --notes-file release-notes.txt \
+            --asset "dist/cocole-iced-v$V-setup.exe" \
+            --repo "${GITHUB_REPOSITORY}"
+          cp update-manifest.json "$RUNNER_TEMP/update-manifest.json"
+
+      - name: Publish manifest to main
+        shell: bash
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          # tag checkout 处于 detached HEAD；基于最新 main 建临时分支提交，
+          # 避免构建期间 main 前进导致 rebase 冲突或 push 被拒。
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B ci-manifest origin/main
+          cp "$RUNNER_TEMP/update-manifest.json" update-manifest.json
+          if git diff --quiet -- update-manifest.json; then
+            echo "manifest unchanged, nothing to publish"
+            exit 0
+          fi
+          git add update-manifest.json
+          git commit -m "manifest: v$V 全量生成 size + sha256 (CI 自动)"
+          git push origin ci-manifest:main
