@@ -3,6 +3,7 @@
 pub mod canvas_view;
 pub mod dialog_sponsor;
 pub mod dialog_update;
+pub mod guide;
 pub mod icons;
 pub mod page_about;
 pub mod page_home;

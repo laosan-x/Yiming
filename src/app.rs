@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use iced::widget::image::Handle;
-use iced::{Task, window};
+use iced::{window, Task};
 use image::RgbaImage;
 
 use crate::core::config::Config;
@@ -30,21 +30,21 @@ const TOAST_MS: u64 = 2400;
 fn get_system_dpi() -> f32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     static CACHED_DPI: AtomicU32 = AtomicU32::new(0);
-    
+
     let cached = CACHED_DPI.load(Ordering::Relaxed);
     if cached != 0 {
         return cached as f32;
     }
-    
+
     // 使用 windows crate 的安全包装调用 GetDpiForSystem
     let dpi = unsafe {
+        use windows::core::{PCSTR, PCWSTR};
         use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-        use windows::core::{PCWSTR, PCSTR};
-        
+
         // user32.dll 在进程启动时已加载
         let user32_w: Vec<u16> = "user32.dll\0".encode_utf16().collect();
         let hmodule = GetModuleHandleW(PCWSTR::from_raw(user32_w.as_ptr()));
-        
+
         if let Ok(h) = hmodule {
             let proc = GetProcAddress(h, PCSTR::from_raw(c"GetDpiForSystem".as_ptr().cast()));
             if let Some(func) = proc {
@@ -57,7 +57,7 @@ fn get_system_dpi() -> f32 {
             96
         }
     };
-    
+
     CACHED_DPI.store(dpi, Ordering::Relaxed);
     dpi as f32
 }
@@ -264,7 +264,9 @@ impl Default for WorkState {
         let (matte_cancel_tx, matte_cancel_rx) = tokio::sync::watch::channel(0u64);
         Self {
             src: None,
-            fields: std::sync::Arc::new(std::sync::Mutex::new(crate::core::matting::FieldCache::default())),
+            fields: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::core::matting::FieldCache::default(),
+            )),
             recompute_seq: 0,
             loading: false,
             frame: 0.0,
@@ -453,24 +455,24 @@ impl Default for IdState {
             realsize: true,
             dpi: ID_DPI,
             screen_dpi: get_system_dpi(),
-                meta: String::new(),
-                render_seq: 0,
-                single_meta: String::new(),
-                sheet_meta: String::new(),
-                queue: Vec::new(),
-                queue_active: None,
-                fg_eroded: None,
-                erode_cache_key: None,
-                cancel_tx,
-                cancel_rx,
-                model_id: None,
-                prefetch: None,
-                decode_inflight: None,
-                export_fmt: crate::core::image::ExportFormat::Png,
-                batch_exporting: false,
-                rot: 0,
-                use_custom_bg: false,
-                custom_bg_hex: "#438EDB".to_string(),
+            meta: String::new(),
+            render_seq: 0,
+            single_meta: String::new(),
+            sheet_meta: String::new(),
+            queue: Vec::new(),
+            queue_active: None,
+            fg_eroded: None,
+            erode_cache_key: None,
+            cancel_tx,
+            cancel_rx,
+            model_id: None,
+            prefetch: None,
+            decode_inflight: None,
+            export_fmt: crate::core::image::ExportFormat::Png,
+            batch_exporting: false,
+            rot: 0,
+            use_custom_bg: false,
+            custom_bg_hex: "#438EDB".to_string(),
         }
     }
 }
@@ -490,11 +492,21 @@ pub enum UpdateStatus {
     /// 发现新版本
     Available(Box<ReleaseInfo>),
     /// 下载中（保留 ReleaseInfo 以便完成后转入 Ready）
-    Downloading { info: Box<ReleaseInfo>, received: u64, total: Option<u64> },
+    Downloading {
+        info: Box<ReleaseInfo>,
+        received: u64,
+        total: Option<u64>,
+    },
     /// 安装包就绪，等待「重启并安装」
-    Ready { info: Box<ReleaseInfo>, path: PathBuf },
+    Ready {
+        info: Box<ReleaseInfo>,
+        path: PathBuf,
+    },
     /// 检查或下载失败（`info` 为 Some 表示下载失败——可重试下载；文案直接给 UI 展示）
-    Failed { msg: String, info: Option<Box<ReleaseInfo>> },
+    Failed {
+        msg: String,
+        info: Option<Box<ReleaseInfo>>,
+    },
 }
 
 /// 自更新模块状态（挂在 App 上）
@@ -508,7 +520,11 @@ pub struct UpdaterState {
 
 impl Default for UpdaterState {
     fn default() -> Self {
-        Self { status: UpdateStatus::Idle, dialog_open: false, cancel: None }
+        Self {
+            status: UpdateStatus::Idle,
+            dialog_open: false,
+            cancel: None,
+        }
     }
 }
 
@@ -531,9 +547,7 @@ impl App {
                 .as_deref()
                 .and_then(parse_hex_color),
         );
-        crate::core::i18n::set_lang(crate::core::i18n::Lang::from_str(
-            &config.appearance.lang,
-        ));
+        crate::core::i18n::set_lang(crate::core::i18n::Lang::from_str(&config.appearance.lang));
         let mut app = Self {
             // 原项目首屏就是工作台（index.html 里 `#pageWork` 带 `on`），首页是可选项
             page: Page::Work,
@@ -665,7 +679,12 @@ impl App {
                     tokio::time::sleep(Duration::from_millis(updater::AUTO_CHECK_DELAY_MS)).await;
                     updater::check().await.map_err(|e| e.to_string())
                 },
-                |result| Message::Updater(UpdaterMessage::Checked { manual: false, result }),
+                |result| {
+                    Message::Updater(UpdaterMessage::Checked {
+                        manual: false,
+                        result,
+                    })
+                },
             )
         } else {
             Task::none()
@@ -673,10 +692,13 @@ impl App {
         // 解析主窗口 Id（自绘标题栏的拖动 / 最小化 / 最大化 / 关闭任务都要用），
         // 并回查一次最大化状态（iced 0.14 无 MAIN 常量，只能经 oldest() 取）
         let win_id = iced::window::oldest().map(Message::WinIdResolved);
-        (app, match startup {
-            Some(t) => Task::batch([welcome, t, auto_check, win_id]),
-            None => Task::batch([welcome, auto_check, win_id]),
-        })
+        (
+            app,
+            match startup {
+                Some(t) => Task::batch([welcome, t, auto_check, win_id]),
+                None => Task::batch([welcome, auto_check, win_id]),
+            },
+        )
     }
 
     pub fn title(&self) -> String {
@@ -701,7 +723,11 @@ impl App {
         if std::env::var_os("COCOLE_DEBUG_CANVAS").is_some() {
             eprintln!("[toast] +{} err={} {}", self.toast_seq, err, text);
         }
-        self.toasts.push(Toast { id: self.toast_seq, text: text.clone(), err });
+        self.toasts.push(Toast {
+            id: self.toast_seq,
+            text: text.clone(),
+            err,
+        });
         // 消息中心镜像：所有 toast 入档（限 100 条），未读计数 +1
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -709,7 +735,13 @@ impl App {
             .as_millis() as u64;
         self.msgs.insert(
             0,
-            MsgItem { id: self.toast_seq, title: text.clone(), err, ts_ms: ts, read: false },
+            MsgItem {
+                id: self.toast_seq,
+                title: text.clone(),
+                err,
+                ts_ms: ts,
+                read: false,
+            },
         );
         self.msgs.truncate(100);
         self.unread += 1;
@@ -774,7 +806,9 @@ mod sys_text {
     use crate::core::i18n::{tr, trf};
 
     pub fn cpu() -> String {
-        let n = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(0);
+        let n = std::thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(0);
         if n > 0 {
             trf("CPU {} 线程", &[&n.to_string()])
         } else {
@@ -784,7 +818,9 @@ mod sys_text {
 
     /// 原生版不做精确内存探测，沿用原项目的估算口径（线程数 × 0.5 GB）
     pub fn mem() -> String {
-        let n = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(0) as f32;
+        let n = std::thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(0) as f32;
         if n > 0.0 {
             trf("内存 ≈{} GB 可用", &[&((n * 0.5) as u32).to_string()])
         } else {
@@ -856,9 +892,16 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
             if page == Page::About {
                 ui::page_about::load_markdown(app);
             }
-            // 首次进入首页：自动弹出分步新手引导（完成 /「不再显示」后不再打扰）
+            // 首次进入首页：自动弹出分步新手引导（完成 /「不再显示」后不再打扰）。
+            // 注意不能同帧置 Some(0)：聚焦洞坐标取自上一帧 draw 记录的 bounds，
+            // 切页首帧还没有数据（会退化成「全屏压暗 + 气泡顶部居中」的兜底
+            // 形态，且静态 UI 不再重绘就一直停留）。延迟一拍再开，首帧渲染
+            // 完成后 bounds 已注册，洞与气泡直接就位。
             if page == Page::Home && !app.config.guide_done && app.guide_step.is_none() {
-                app.guide_step = Some(0);
+                return Task::perform(
+                    async { tokio::time::sleep(std::time::Duration::from_millis(120)).await },
+                    |()| Message::Home(crate::message::HomeMessage::StartGuide),
+                );
             }
             // 离开首页即收起引导（回到首页且未标记完成时会再次自动弹出）
             if page != Page::Home {
@@ -1005,7 +1048,7 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
                 app.sponsor_custom = s;
                 Task::none()
             }
-        }
+        },
         // 拖拽悬停：只驱动首页拖放区高亮（幂等，事件重复无副作用）
         Message::DropHover(hover) => {
             app.drop_hover = hover;
@@ -1016,9 +1059,7 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
         Message::DroppedFile(path) => {
             app.drop_hover = false;
             match app.page {
-                Page::IdPhoto => {
-                    ui::page_idphoto::update(app, IdMessage::FilePicked(Some(path)))
-                }
+                Page::IdPhoto => ui::page_idphoto::update(app, IdMessage::FilePicked(Some(path))),
                 _ => {
                     app.page = Page::Work;
                     ui::page_work::update(app, WorkMessage::OpenPath(path))
@@ -1062,7 +1103,12 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
             app.updater.status = UpdateStatus::Checking;
             Task::perform(
                 async { updater::check().await.map_err(|e| e.to_string()) },
-                |result| Message::Updater(UpdaterMessage::Checked { manual: true, result }),
+                |result| {
+                    Message::Updater(UpdaterMessage::Checked {
+                        manual: true,
+                        result,
+                    })
+                },
             )
         }
         UpdaterMessage::Checked { manual, result } => {
@@ -1072,26 +1118,34 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
                 Ok(updater::CheckOutcome::UpToDate) => {
                     app.updater.status = UpdateStatus::UpToDate;
                     if manual {
-                        app.toast(trf("已是最新版本（v{}）", &[updater::current_version_text()]));
+                        app.toast(trf(
+                            "已是最新版本（v{}）",
+                            &[updater::current_version_text()],
+                        ));
                     }
                 }
                 Ok(updater::CheckOutcome::Update(info)) => {
-                    let skipped =
-                        app.config.updates.skipped_version.as_deref() == Some(info.version.as_str());
+                    let skipped = app.config.updates.skipped_version.as_deref()
+                        == Some(info.version.as_str());
                     app.updater.status = UpdateStatus::Available(info.clone());
                     // 通知推送：手动检查总是弹窗；自动检查被忽略版本不弹窗，仅 toast 一次
                     if manual {
                         app.updater.dialog_open = true;
                     } else if skipped {
-                        app.toast(trf("发现新版本 v{}（你已选择忽略此版本）", &[&info.version]));
+                        app.toast(trf(
+                            "发现新版本 v{}（你已选择忽略此版本）",
+                            &[&info.version],
+                        ));
                     } else {
                         app.updater.dialog_open = true;
                         app.toast(trf("发现新版本 v{}", &[&info.version]));
                     }
                 }
                 Err(e) => {
-                    app.updater.status =
-                        UpdateStatus::Failed { msg: e.clone(), info: None };
+                    app.updater.status = UpdateStatus::Failed {
+                        msg: e.clone(),
+                        info: None,
+                    };
                     if manual {
                         app.toast_err(trf("检查更新失败：{}", &[&e]));
                     } else {
@@ -1107,9 +1161,9 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
                     (info.clone(), updater::installer_dest(&info.version))
                 }
                 // 下载失败后的「重试下载」也走这里
-                UpdateStatus::Failed { info: Some(info), .. } => {
-                    (info.clone(), updater::installer_dest(&info.version))
-                }
+                UpdateStatus::Failed {
+                    info: Some(info), ..
+                } => (info.clone(), updater::installer_dest(&info.version)),
                 _ => return Task::none(),
             };
             let Some(dest) = dest else {
@@ -1137,8 +1191,10 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
         }
         UpdaterMessage::DownloadEvent(DownloadEvent::Done { path, .. }) => {
             if let UpdateStatus::Downloading { info, .. } = &app.updater.status {
-                app.updater.status =
-                    UpdateStatus::Ready { info: info.clone(), path: path.clone() };
+                app.updater.status = UpdateStatus::Ready {
+                    info: info.clone(),
+                    path: path.clone(),
+                };
                 app.updater.cancel = None;
             }
             Task::none()
@@ -1149,7 +1205,10 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
                 UpdateStatus::Downloading { info, .. } => Some(info.clone()),
                 _ => None,
             };
-            app.updater.status = UpdateStatus::Failed { msg: e.clone(), info };
+            app.updater.status = UpdateStatus::Failed {
+                msg: e.clone(),
+                info,
+            };
             app.updater.cancel = None;
             app.toast_err(trf("下载失败：{}", &[&e]));
             Task::none()
@@ -1224,11 +1283,11 @@ fn update_updater(app: &mut App, msg: UpdaterMessage) -> Task<Message> {
 /// （HEX 输入等）聚焦时按键被控件捕获，不会误触快捷键 —— 等价于参考项目
 /// 「target 是 INPUT 就跳过」。
 pub fn subscription(app: &App) -> iced::Subscription<Message> {
-    use iced::keyboard::{Event as KbdEvent, Key, key::Named};
+    use iced::keyboard::{key::Named, Event as KbdEvent, Key};
 
     // 窗口尺寸变化 —— 所有页面都要监听（首页响应式断点依赖它）
-    let resize = window::resize_events()
-        .map(|(_id, size)| Message::WinResized(size.width, size.height));
+    let resize =
+        window::resize_events().map(|(_id, size)| Message::WinResized(size.width, size.height));
 
     // 文件拖拽 —— 全局监听：悬停高亮 + 落下按当前页路由载入。
     // （iced 0.14 由 winit 原生转发 FileHovered / FileDropped / FilesHoveredLeft，
@@ -1371,19 +1430,17 @@ pub fn view(app: &App) -> iced::Element<'_, Message> {
     let toasts: iced::Element<Message> = if app.toasts.is_empty() {
         iced::widget::Space::new().width(0).height(0).into()
     } else {
-        iced::widget::container(
-            app.toasts
-                .iter()
-                .fold(column![].spacing(8), |c, t| {
-                    c.push(
-                        iced::widget::container(
-                            iced::widget::text(&t.text).size(theme::FS_SM),
-                        )
-                        .padding(theme::pad(10.0, 17.0, 10.0, 17.0))
-                        .style(if t.err { theme::toast_err } else { theme::toast_ink }),
-                    )
-                }),
-        )
+        iced::widget::container(app.toasts.iter().fold(column![].spacing(8), |c, t| {
+            c.push(
+                iced::widget::container(iced::widget::text(&t.text).size(theme::FS_SM))
+                    .padding(theme::pad(10.0, 17.0, 10.0, 17.0))
+                    .style(if t.err {
+                        theme::toast_err
+                    } else {
+                        theme::toast_ink
+                    }),
+            )
+        }))
         .align_x(iced::Alignment::Center)
         .align_y(iced::Alignment::End)
         .width(iced::Length::Fill)
@@ -1434,25 +1491,27 @@ pub fn view(app: &App) -> iced::Element<'_, Message> {
 
 /// 消息中心浮层（右下角弹出：标题 + 全部已读 + 消息列表 + 空态）
 pub fn msg_center_panel(app: &App) -> iced::Element<'_, Message> {
-    use iced::widget::{button, column, container, mouse_area, row, scrollable, stack, text, Space};
+    use iced::widget::{
+        button, column, container, mouse_area, row, scrollable, stack, text, Space,
+    };
 
     let i18n_key = |k: &'static str| crate::core::i18n::tr(k);
     let mut list = column![].spacing(8);
     if app.msgs.is_empty() {
         list = list.push(
-            container(text(i18n_key("msg.empty")).size(theme::FS_SM).color(theme::TXT3()))
-                .padding(theme::pad(24.0, 12.0, 24.0, 12.0))
-                .width(iced::Length::Fill)
-                .center_x(iced::Length::Fill),
+            container(
+                text(i18n_key("msg.empty"))
+                    .size(theme::FS_SM)
+                    .color(theme::TXT3()),
+            )
+            .padding(theme::pad(24.0, 12.0, 24.0, 12.0))
+            .width(iced::Length::Fill)
+            .center_x(iced::Length::Fill),
         );
     }
     for m in app.msgs.iter().take(30) {
         let time = crate::core::i18n::fmt_datetime(m.ts_ms);
-        let dot_color = if m.read {
-            theme::TXT3()
-        } else {
-            theme::ACC()
-        };
+        let dot_color = if m.read { theme::TXT3() } else { theme::ACC() };
         list = list.push(
             container(
                 column![
@@ -1462,13 +1521,17 @@ pub fn msg_center_panel(app: &App) -> iced::Element<'_, Message> {
                         } else {
                             "NEW"
                         })
-                            .size(theme::FS_XS)
-                            .color(dot_color),
+                        .size(theme::FS_XS)
+                        .color(dot_color),
                         text(time.clone()).size(theme::FS_XS).color(theme::TXT3()),
                         Space::new().width(iced::Length::Fill),
                         text(if m.err { "!" } else { "·" })
                             .size(theme::FS_XS)
-                            .color(if m.err { theme::DANGER() } else { theme::TXT3() }),
+                            .color(if m.err {
+                                theme::DANGER()
+                            } else {
+                                theme::TXT3()
+                            }),
                     ]
                     .spacing(8),
                     text(&m.title).size(theme::FS_SM).color(theme::TXT()),
@@ -1482,12 +1545,19 @@ pub fn msg_center_panel(app: &App) -> iced::Element<'_, Message> {
     }
 
     let header = row![
-        text(i18n_key("msg.center")).size(theme::FS_H).color(theme::TXT()).font(theme::bold_font()),
+        text(i18n_key("msg.center"))
+            .size(theme::FS_H)
+            .color(theme::TXT())
+            .font(theme::bold_font()),
         Space::new().width(iced::Length::Fill),
-        button(text(i18n_key("msg.mark_all_read")).size(theme::FS_XS).color(theme::TXT2()))
-            .padding(theme::pad(4.0, 10.0, 4.0, 10.0))
-            .style(theme::btn_ghost)
-            .on_press(Message::MarkAllMsgsRead),
+        button(
+            text(i18n_key("msg.mark_all_read"))
+                .size(theme::FS_XS)
+                .color(theme::TXT2())
+        )
+        .padding(theme::pad(4.0, 10.0, 4.0, 10.0))
+        .style(theme::btn_ghost)
+        .on_press(Message::MarkAllMsgsRead),
     ]
     .align_y(iced::Alignment::Center);
 
@@ -1496,16 +1566,23 @@ pub fn msg_center_panel(app: &App) -> iced::Element<'_, Message> {
 
     // 透明关闭层：点击浮层外的任意区域关闭——不绘制背景，页面保持可见可读
     let catcher = mouse_area(
-        container(Space::new().width(iced::Length::Fill).height(iced::Length::Fill))
-            .width(iced::Length::Fill)
-            .height(iced::Length::Fill),
+        container(
+            Space::new()
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill),
+        )
+        .width(iced::Length::Fill)
+        .height(iced::Length::Fill),
     )
     .on_press(Message::ToggleMsgCenter);
 
     // 卡片样式：与现有界面一致（PANEL 底 + hairline + --r-panel + 最高层阴影）
     let card = container(
-        column![header, scrollable(container(list).width(iced::Length::Fill)).height(iced::Length::Fill)]
-            .spacing(12),
+        column![
+            header,
+            scrollable(container(list).width(iced::Length::Fill)).height(iced::Length::Fill)
+        ]
+        .spacing(12),
     )
     .width(iced::Length::Fixed(360.0))
     .height(iced::Length::Fixed(panel_h))
@@ -1599,7 +1676,11 @@ fn window_icon() -> Option<window::Icon> {
                 match image::load_from_memory(&bytes) {
                     Ok(decoded) => {
                         let rgba = decoded.to_rgba8();
-                        log(&format!("[icon] 解码成功: {}x{}", rgba.width(), rgba.height()));
+                        log(&format!(
+                            "[icon] 解码成功: {}x{}",
+                            rgba.width(),
+                            rgba.height()
+                        ));
                         Some(rgba)
                     }
                     Err(e) => {
@@ -1625,7 +1706,11 @@ fn window_icon() -> Option<window::Icon> {
         match image::load_from_memory(BADGE) {
             Ok(decoded) => {
                 let rgba = decoded.to_rgba8();
-                log(&format!("[icon] 内嵌图标解码成功: {}x{}", rgba.width(), rgba.height()));
+                log(&format!(
+                    "[icon] 内嵌图标解码成功: {}x{}",
+                    rgba.width(),
+                    rgba.height()
+                ));
                 Some(rgba)
             }
             Err(e) => {
