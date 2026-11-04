@@ -51,7 +51,7 @@ const PRESETS: &[(&str, &str, &str, usize, usize)] = &[
 ];
 
 /// 分步新手引导：（目标区域，标题，说明）；顺序即步骤顺序。
-/// Target 对应聚焦挖洞的区域，说明气泡锚定在洞旁。
+/// Target 对应聚焦描边围住的区域，说明气泡锚定在目标旁。
 const GUIDE_STEPS: &[(Target, &str, &str)] = &[
     (
         Target::StartCard,
@@ -362,7 +362,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .style(move |t| if g == Some(0) { card_hi(t) } else { card(t) })
     .width(Length::Fill)
     .into();
-    // 聚焦引导：draw 时上报自身 bounds（挖洞 / 气泡锚定数据源）
+    // 聚焦引导：draw 时上报自身 bounds（描边 / 气泡锚定数据源）
     let start: Element<'_, Message> = guide::Tracked::new(Target::StartCard, start).into();
 
     /* ── 右：快速预设（2 列网格，参考 `.home-presets{gap:10px}`） ── */
@@ -489,11 +489,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .width(Length::Fill)
     .style(move |t, s| {
         let mut st = btn_primary(t, s);
-        // 引导高亮：强调色描边让 CTA 在遮罩上依然醒目
+        // 引导高亮：与目标描边统一的强调色细边框
         if g == Some(3) {
             st.border = Border {
                 color: ACC(),
-                width: 3.0,
+                width: 2.0,
                 radius: R_CARD.into(),
             };
         }
@@ -573,10 +573,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .style(app_bg)
     .into();
-    // 聚焦引导坐标系基准（洞绝对坐标 → 遮罩画布相对坐标的换算依据）
+    // 聚焦引导坐标系基准（目标绝对坐标 → 透明画布相对坐标的换算依据）
     let home_root: Element<'_, Message> = guide::Tracked::new(Target::Root, home_root).into();
 
-    // 分步新手引导：进行中时在首页内容之上叠放遮罩 + 步骤卡
+    // 分步新手引导：进行中时在首页内容之上叠透明描边层 + 步骤卡
     let base: Element<'_, Message> = home_root;
     if let Some(step) = app.guide_step {
         iced::widget::stack![base, guide_overlay(app, step)]
@@ -600,18 +600,18 @@ fn card_hi(t: &Theme) -> container::Style {
     st
 }
 
-/// 分步新手引导：聚焦式（Spotlight）——洞外压暗、目标挖洞高亮，
-/// 说明气泡锚定在洞旁（guide::spotlight 负责定位与事件穿透）。
+/// 分步新手引导：聚焦式（Spotlight）——目标外圈描边高亮（无遮罩、页面
+/// 不变暗），说明气泡锚定在目标旁（guide::spotlight 负责定位与事件穿透）。
 fn guide_overlay<'a>(app: &'a App, step: usize) -> Element<'a, Message> {
     let (target, _, _) = GUIDE_STEPS[step];
-    // 洞外扩 6px 呼吸空间，让描边不贴住控件边缘
-    let hole_abs = guide::bounds(target).map(|r| Rectangle {
+    // 描边外扩 6px 呼吸间距，不贴住控件边缘（与首页 grid gap 14px 同系）
+    let ring_abs = guide::bounds(target).map(|r| Rectangle {
         x: r.x - 6.0,
         y: r.y - 6.0,
         width: r.width + 12.0,
         height: r.height + 12.0,
     });
-    guide::spotlight(hole_abs, guide_bubble(app, step))
+    guide::spotlight(ring_abs, guide_bubble(app, step))
 }
 
 /// 引导说明气泡：徽标 + 标题 + 步数 → 说明 → 进度点 → 操作行

@@ -1,13 +1,13 @@
-//! 聚焦式新手引导（Spotlight）：遮罩挖洞高亮目标区 + 说明气泡锚定目标旁。
+//! 聚焦式新手引导（Spotlight）：目标描边高亮 + 说明气泡锚定目标旁。
 //!
 //! 三件套：
 //! 1. [`Target`] + [`Tracked`]：给目标控件包一层探针 widget，draw 时把自己的
 //!    窗口绝对坐标写进注册表——每帧更新，天然跟随侧栏折叠 / 窗口缩放 / DPI；
-//! 2. [`HoleMask`]：全屏 canvas 遮罩，在目标区域「挖洞」——四块半透明矩形
-//!    围合 + 圆角强调色描边。洞内点击**穿透**到下层真实控件（与 `dashed_box`
-//!    的 canvas 事件穿透同机制），洞外点击推进引导；
-//! 3. [`spotlight`]：把说明气泡锚定到洞旁——优先放洞下方，放不下放上方，
-//!    两者都放不下时兜底顶部居中（洞缺失 / 未注册时同样走兜底，不崩溃）。
+//! 2. [`FocusRing`]：全屏透明 canvas，**只画目标外的一圈圆角描边**——不压暗、
+//!    不覆盖背景，页面原有亮度与内容可读性完全保留。它同时负责捕获点击推进
+//!    引导，事件保持 Ignored 继续传播，点目标本身会真实触发下层控件；
+//! 3. [`spotlight`]：把说明气泡锚定到目标旁——优先放下方，放不下放上方，
+//!    两者都放不下时兜底顶部居中（目标坐标未注册时同样走兜底，不崩溃）。
 //!
 //! 坐标系说明：`Tracked` 记录的是窗口绝对坐标；view 构建发生在 draw 之前，
 //! 读到的是**上一帧**的 bounds——布局未变时即为正确值，步骤切换 / 窗口
@@ -22,9 +22,7 @@ use iced::advanced::{overlay, renderer, Clipboard, Shell, Widget};
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{container, stack};
-use iced::{
-    Alignment, Color, Element, Event, Length, Padding, Point, Rectangle, Size, Theme, Vector,
-};
+use iced::{Alignment, Element, Event, Length, Padding, Point, Rectangle, Size, Theme, Vector};
 
 use crate::message::{HomeMessage, Message};
 use crate::theme::{ACC, R_CARD};
@@ -206,25 +204,22 @@ impl<'a> From<Tracked<'a>> for Element<'a, Message> {
     }
 }
 
-/* ═════════════════ 挖洞遮罩 ═════════════════ */
+/* ═════════════════ 聚焦描边层 ═════════════════ */
 
-/// 压暗色（比旧版 0.22 深，让「洞」的对比更强）
-const SCRIM: Color = Color {
-    r: 0.055,
-    g: 0.065,
-    b: 0.08,
-    a: 0.55,
-};
-
-/// 全屏挖洞遮罩：`hole` 为相对画布的洞区域（None = 整面压暗兜底）。
-/// 洞内点击穿透（返回 None，事件继续传播到下层真实控件），
-/// 洞外点击推进引导（capture 防止误触下层控件）。
-pub struct HoleMask {
-    pub hole: Option<Rectangle>,
+/// 全屏透明层：只在目标外画一圈圆角描边，**不压暗、不覆盖背景**。
+///
+/// `ring` 为相对画布的描边外框（调用方已外扩呼吸间距）；目标坐标未注册
+/// （None）时不画任何东西，仅由气泡的兜底定位提示用户，页面保持原样。
+///
+/// 事件语义保持不变：任意位置点击都推进引导，且 `Action` 保持
+/// Ignored 让事件继续传播——点目标本身会真实触发下层控件（如上传卡弹文件
+/// 选择器），「操作即学会」；气泡在更上层，其按钮不会走到这里。
+pub struct FocusRing {
+    pub ring: Option<Rectangle>,
     pub radius: f32,
 }
 
-impl canvas::Program<Message> for HoleMask {
+impl canvas::Program<Message> for FocusRing {
     type State = ();
 
     fn draw(
@@ -235,38 +230,19 @@ impl canvas::Program<Message> for HoleMask {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        let Some(r) = self.ring else {
+            // 无坐标：不画任何覆盖物（绝不整面压暗）
+            return Vec::new();
+        };
         let mut frame = Frame::new(renderer, bounds.size());
-        match self.hole {
-            Some(h) => {
-                let (cw, ch) = (bounds.width, bounds.height);
-                // 四块半透明矩形围合出洞（左右块 y 范围与洞重叠，接缝处无缝）。
-                // 注意 fill 默认黑色，压暗色必须显式传 SCRIM。
-                let mut quad = |p: Point, s: Size| frame.fill(&Path::rectangle(p, s), SCRIM);
-                quad(Point::new(0.0, 0.0), Size::new(cw, h.y.max(0.0)));
-                quad(
-                    Point::new(0.0, h.y + h.height),
-                    Size::new(cw, (ch - h.y - h.height).max(0.0)),
-                );
-                quad(
-                    Point::new(0.0, h.y.max(0.0)),
-                    Size::new(h.x.max(0.0), h.height),
-                );
-                quad(
-                    Point::new(h.x + h.width, h.y.max(0.0)),
-                    Size::new((cw - h.x - h.width).max(0.0), h.height),
-                );
-                // 洞边框：强调色圆角描边，外扩 1.5px 让线宽完整可见
-                let path = Path::rounded_rectangle(
-                    Point::new(h.x - 1.5, h.y - 1.5),
-                    Size::new(h.width + 3.0, h.height + 3.0),
-                    (self.radius + 1.5).into(),
-                );
-                frame.stroke(&path, Stroke::default().with_color(ACC()).with_width(2.5));
-            }
-            None => {
-                frame.fill(&Path::rectangle(Point::new(0.0, 0.0), bounds.size()), SCRIM);
-            }
-        }
+        // 单层圆角描边：颜色 / 线宽 / 圆角全部复用主题 token，与 `card_hi`
+        // 的目标自身描边保持一致；外框与元素边框之间的间距由调用方外扩给出。
+        let path = Path::rounded_rectangle(
+            Point::new(r.x, r.y),
+            Size::new(r.width, r.height),
+            self.radius.into(),
+        );
+        frame.stroke(&path, Stroke::default().with_color(ACC()).with_width(2.0));
         vec![frame.into_geometry()]
     }
 
@@ -279,7 +255,7 @@ impl canvas::Program<Message> for HoleMask {
     ) -> Option<canvas::Action<Message>> {
         if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             if cursor.position_in(bounds).is_some() {
-                // 点击推进引导；Action 为 Ignored 状态，事件继续传播——洞内
+                // 点击推进引导；Action 为 Ignored 状态，事件继续传播——目标区
                 // 点击会同时触发下层真实控件（如上传卡弹文件选择器），
                 // 「操作即学会」；气泡区在更上层，按钮点击不会到这里。
                 return Some(canvas::Action::publish(Message::Home(
@@ -298,32 +274,32 @@ const BUBBLE_W: f32 = 328.0;
 /// 气泡估算高度（仅用于判断洞下方是否放得下；实际高度由内容决定）
 const BUBBLE_H_EST: f32 = 196.0;
 
-/// 组装聚焦层：挖洞遮罩 + 锚定在洞旁的说明气泡。
-/// `hole_abs` 为洞的窗口绝对坐标（外扩过呼吸空间）；未注册（None）时
-/// 整面压暗、气泡顶部居中兜底。
+/// 组装聚焦层：透明描边层 + 锚定在目标旁的说明气泡。
+/// `ring_abs` 为描边外框的窗口绝对坐标（已外扩呼吸间距）；目标坐标未注册
+/// （None）时不画描边、气泡顶部居中兜底，页面不发生任何变暗或覆盖。
 pub fn spotlight<'a>(
-    hole_abs: Option<Rectangle>,
+    ring_abs: Option<Rectangle>,
     bubble: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let root = bounds(Target::Root);
-    // 绝对坐标 → 相对遮罩画布（画布与 Root 同区域、同坐标系）
-    let hole_rel = hole_abs.zip(root).map(|(h, r)| Rectangle {
+    // 绝对坐标 → 相对画布坐标（画布与 Root 同区域、同坐标系）
+    let ring_rel = ring_abs.zip(root).map(|(h, r)| Rectangle {
         x: h.x - r.x,
         y: h.y - r.y,
         width: h.width,
         height: h.height,
     });
 
-    let mask = Canvas::new(HoleMask {
-        hole: hole_rel,
+    let focus = Canvas::new(FocusRing {
+        ring: ring_rel,
         radius: R_CARD,
     })
     .width(Length::Fill)
     .height(Length::Fill);
 
-    // 气泡定位：洞下方优先（padding-top 顶推），放不下改上方（底对齐 + padding-bottom），
-    // 水平方向跟随洞左缘并钳制在容器内
-    let anchored = match (hole_rel, root) {
+    // 气泡定位：目标下方优先（padding-top 顶推），放不下改上方（底对齐 + padding-bottom），
+    // 水平方向跟随描边左缘并钳制在容器内
+    let anchored = match (ring_rel, root) {
         (Some(h), Some(r)) => {
             let (aw, ah) = (r.width, r.height);
             let left = (h.x - 4.0).clamp(10.0, (aw - BUBBLE_W - 10.0).max(10.0));
@@ -364,7 +340,7 @@ pub fn spotlight<'a>(
             }),
     };
 
-    stack![mask, anchored]
+    stack![focus, anchored]
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

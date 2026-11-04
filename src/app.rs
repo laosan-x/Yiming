@@ -908,9 +908,9 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
                 ui::page_about::load_markdown(app);
             }
             // 首次进入首页：自动弹出分步新手引导（完成 /「不再显示」后不再打扰）。
-            // 聚焦洞取自上一帧 draw 注册的 bounds，切页首帧还没有数据；固定
+            // 目标 bounds 取自上一帧 draw 注册，切页首帧还没有数据；固定
             // sleep 在慢机器上不够，改为轮询等首帧注册完成（10 × 60ms 上限），
-            // 否则会退化成「全屏压暗 + 气泡顶部居中」且静态 UI 不再重绘而永久停留。
+            // 否则会退化成「无描边 + 气泡顶部居中」且静态 UI 不再重绘而永久停留。
             if page == Page::Home && !app.config.guide_done && app.guide_step.is_none() {
                 return Task::perform(
                     async {
