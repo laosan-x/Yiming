@@ -51,6 +51,7 @@ const PRESETS: &[(&str, &str, &str, usize, usize)] = &[
 ];
 
 /// 分步新手引导：（目标区域，标题，说明）；顺序即步骤顺序。
+/// 内容保持不变，仅由首页「新手引导」按钮触发，不自动展示。
 /// Target 对应聚焦描边围住的区域，说明气泡锚定在目标旁。
 const GUIDE_STEPS: &[(Target, &str, &str)] = &[
     (
@@ -124,6 +125,12 @@ pub fn update(app: &mut App, msg: HomeMessage) -> Task<Message> {
         // 状态转移统一走 guide::transition 纯函数（可 headless 单测）；
         // 这里只负责把结果写回 App 与持久化副作用。
         HomeMessage::StartGuide => {
+            // 唯一开启入口：首页「新手引导」按钮。加页面守卫是为了防止任何
+            // 后台 Task / 跨页消息在别的页面误开引导——气泡锚定依赖首页的
+            // 目标 bounds，且需求要求「仅主动点击按钮才展示」。
+            if app.page != Page::Home {
+                return Task::none();
+            }
             app.guide_step =
                 guide::transition(app.guide_step, guide::Action::Start, GUIDE_STEPS.len()).0;
             Task::none()
@@ -149,7 +156,7 @@ pub fn update(app: &mut App, msg: HomeMessage) -> Task<Message> {
             Task::none()
         }
         HomeMessage::GuideSkip => {
-            // 仅关闭：下次进首页（未标记完成时）仍会自动弹出
+            // 仅关闭：不写 guide_done；引导不会自动再弹，只能点按钮重开
             app.guide_step =
                 guide::transition(app.guide_step, guide::Action::Skip, GUIDE_STEPS.len()).0;
             Task::none()
@@ -259,7 +266,8 @@ fn card_head<'a>(icon_name: &'static str, title: &'a str) -> Element<'a, Message
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    // 分步引导当前步骤（Some = 引导进行中，对应区域加高亮描边）
+    // 分步引导当前步骤：None（默认）= 一个引导元素都不渲染；
+    // Some 才给目标加高亮描边并在末尾叠气泡 + 透明事件层。
     let g = app.guide_step;
 
     /* ── 顶部：标题 / 副标 / 新手引导（参考 `.home-head`：三段全部居中，
@@ -604,7 +612,8 @@ fn card_hi(t: &Theme) -> container::Style {
 
 /// 分步新手引导：目标控件**自身**一圈描边高亮（无遮罩、页面不变暗、
 /// 也不再叠加外扩聚焦框），说明气泡锚定在目标旁（guide::spotlight 负责
-/// 定位与事件穿透）。
+/// 定位与事件穿透）。仅当用户点「新手引导」按钮、guide_step 为 Some 时
+/// 才会被 view 调用；默认路径完全不会构造这层。
 fn guide_overlay<'a>(app: &'a App, step: usize) -> Element<'a, Message> {
     let (target, _, _) = GUIDE_STEPS[step];
     // 气泡锚定框：目标外扩 6px 呼吸间距（与首页 grid gap 14px 同系）。
@@ -682,7 +691,7 @@ fn guide_bubble<'a>(_app: &'a App, step: usize) -> Element<'a, Message> {
         );
     }
 
-    // 操作行：跳过（=不再自动弹出）··· 上一步 / 下一步（末步为完成）
+    // 操作行：跳过（关闭并记住）··· 上一步 / 下一步（末步为完成）
     let skip_btn = button(text(tr("跳过")).size(FS_SM).color(TXT2()))
         .padding(pad(6.0, 12.0, 6.0, 12.0))
         .style(btn_ghost)

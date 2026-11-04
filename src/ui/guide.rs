@@ -1,5 +1,10 @@
 //! 聚焦式新手引导：目标自身高亮描边 + 说明气泡锚定目标旁。
 //!
+//! **默认完全不展示**：启动、刷新、首次进入首页、切页往返都不会自动弹出；
+//! 整个引导层（描边 + 气泡 + 事件层）只有 `guide_step == Some` 时才进入
+//! 视图树，而把它置为 Some 的唯一入口是首页「新手引导」按钮发出的
+//! `HomeMessage::StartGuide`（→ [`transition`] 的 [`Action::Start`]）。
+//!
 //! 三件套：
 //! 1. [`Target`] + [`Tracked`]：给目标控件包一层探针 widget，draw 时把自己的
 //!    窗口绝对坐标写进注册表——每帧更新，天然跟随侧栏折叠 / 窗口缩放 / DPI；
@@ -59,8 +64,9 @@ pub fn bounds(id: Target) -> Option<Rectangle> {
 /// 清空目标坐标注册表（切离首页 / 关闭引导时调用）。
 ///
 /// 窗口 resize、DPI 变化或侧栏折叠后，首页重新 draw 之前存在一段空窗；
-/// 此时若沿用上一帧的绝对坐标开引导，气泡锚点会落到错位甚至屏幕外。清空后由
-/// `app.rs` 的就绪轮询等待首帧重新注册，避免读到过期坐标。
+/// 此时若沿用上一帧的绝对坐标开引导，气泡锚点会落到错位甚至屏幕外。
+/// 清空后由首页下一帧 draw 重新注册；引导只能由按钮手动开启，而点击时
+/// 首页早已渲染完成，坐标是新的，无需额外的就绪轮询。
 pub fn clear() {
     if let Ok(mut m) = tracks().lock() {
         m.clear();
@@ -216,6 +222,8 @@ impl<'a> From<Tracked<'a>> for Element<'a, Message> {
 /// 事件语义保持不变：任意位置点击都推进引导，且 `Action` 保持
 /// Ignored 让事件继续传播——点目标本身会真实触发下层控件（如上传卡弹文件
 /// 选择器），「操作即学会」；气泡在更上层，其按钮不会走到这里。
+/// 注意本层只在用户点按钮后（`guide_step == Some`）才被放入视图树，
+/// 引导关闭时它根本不存在，不会有「点任意位置意外弹出引导」的可能。
 pub struct GuideLayer;
 
 impl canvas::Program<Message> for GuideLayer {
@@ -353,6 +361,9 @@ pub enum Action {
 ///
 /// 返回 `(新步, 是否应写入 guide_done)`；`step == None` 表示引导未开启。
 /// `total` 为步骤总数（由调用方传 `GUIDE_STEPS.len()`）。
+///
+/// **开启引导的唯一动作是 [`Action::Start`]**（首页「新手引导」按钮）。
+/// 引导未开启时其它任何动作都保持 None，避免误发的消息把引导层带出来。
 pub fn transition(step: Option<usize>, action: Action, total: usize) -> (Option<usize>, bool) {
     let last = total.saturating_sub(1);
     match action {
@@ -363,9 +374,14 @@ pub fn transition(step: Option<usize>, action: Action, total: usize) -> (Option<
             Some(_) => (None, true), // 末步「完成」：关闭并持久化
             None => (None, false),   // 未开启时忽略，绝不误写 guide_done
         },
-        Action::Goto(i) => (Some(i.min(last)), false),
-        Action::Skip => (None, false), // 仅关闭，下次进首页仍会再弹
-        Action::Never => (None, true), // 关闭并持久化「不再显示」
+        // 跳步只在引导进行中有效；旧实现从 None 也会返回 Some(i)，
+        // 会让一次误发的 GuideGoto 在用户没点按钮时弹出引导。
+        Action::Goto(i) => match step {
+            Some(_) => (Some(i.min(last)), false),
+            None => (None, false),
+        },
+        Action::Skip => (None, false), // 仅关闭；再开启只能靠「新手引导」按钮
+        Action::Never => (None, true), // 关闭并持久化「不再显示」历史标记
     }
 }
 
@@ -411,10 +427,35 @@ mod tests {
     }
 
     #[test]
-    fn goto_clamps_out_of_range() {
-        assert_eq!(transition(None, Action::Goto(2), TOTAL), (Some(2), false));
-        assert_eq!(transition(None, Action::Goto(99), TOTAL), (Some(3), false));
-        assert_eq!(transition(None, Action::Goto(0), 0), (Some(0), false));
+    fn goto_clamps_out_of_range_only_while_open() {
+        assert_eq!(
+            transition(Some(0), Action::Goto(2), TOTAL),
+            (Some(2), false)
+        );
+        assert_eq!(
+            transition(Some(0), Action::Goto(99), TOTAL),
+            (Some(3), false)
+        );
+        assert_eq!(transition(Some(0), Action::Goto(5), 0), (Some(0), false));
+        // 引导未开启时，跳步消息不得把引导带出来
+        assert_eq!(transition(None, Action::Goto(2), TOTAL), (None, false));
+    }
+
+    #[test]
+    fn only_start_can_open_the_guide() {
+        // 回归需求：默认不自动展示，且其它任何操作都不得意外触发
+        for action in [
+            Action::Prev,
+            Action::Next,
+            Action::Goto(0),
+            Action::Goto(3),
+            Action::Skip,
+            Action::Never,
+        ] {
+            let (step, _) = transition(None, action, TOTAL);
+            assert_eq!(step, None, "{action:?} 不应开启引导");
+        }
+        assert_eq!(transition(None, Action::Start, TOTAL).0, Some(0));
     }
 
     #[test]
@@ -425,7 +466,7 @@ mod tests {
 
     #[test]
     fn zero_total_does_not_panic() {
-        assert_eq!(transition(None, Action::Goto(5), 0), (Some(0), false));
+        assert_eq!(transition(None, Action::Goto(5), 0), (None, false));
         assert_eq!(transition(Some(0), Action::Next, 0), (None, true));
     }
 }

@@ -137,7 +137,8 @@ pub struct App {
     pub unread: usize,
     /// 消息中心面板展开中
     pub msg_center_open: bool,
-    /// 首页分步新手引导：Some(步骤序号) = 引导进行中；None = 未显示
+    /// 首页分步新手引导：Some(步骤序号) = 引导进行中；None = 未显示（默认）。
+    /// 只能由首页「新手引导」按钮（StartGuide）置为 Some，不自动弹出。
     pub guide_step: Option<usize>,
 
     /* ─ 自绘标题栏 / 打赏 ── */
@@ -628,7 +629,8 @@ impl App {
             sponsor_custom: String::new(),
         };
         if first {
-            // 首次运行给一次引导提示；写入标记，之后不再打扰（对应原项目 hasSeen()）
+            // 首次运行的欢迎 toast：普通提示，不属于分步新手引导 UI
+            // （引导内容只有首页「新手引导」按钮能开启），对应原项目 hasSeen()
             app.toast(tr("欢迎使用壹鸣 · 拖入图片即可开始"));
             app.config.seen_onboarding = true;
             app.config.save();
@@ -907,25 +909,12 @@ fn dispatch(app: &mut App, message: Message) -> Task<Message> {
             if page == Page::About {
                 ui::page_about::load_markdown(app);
             }
-            // 首次进入首页：自动弹出分步新手引导（完成 /「不再显示」后不再打扰）。
-            // 目标 bounds 取自上一帧 draw 注册，切页首帧还没有数据；固定
-            // sleep 在慢机器上不够，改为轮询等首帧注册完成（10 × 60ms 上限），
-            // 否则会退化成「无描边 + 气泡顶部居中」且静态 UI 不再重绘而永久停留。
-            if page == Page::Home && !app.config.guide_done && app.guide_step.is_none() {
-                return Task::perform(
-                    async {
-                        for _ in 0..10 {
-                            if ui::guide::bounds(ui::guide::Target::StartCard).is_some() {
-                                break;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-                        }
-                    },
-                    |()| Message::Home(crate::message::HomeMessage::StartGuide),
-                );
-            }
-            // 离开首页即收起引导，并清空过期的目标坐标（窗口 resize / DPI
-            // 变化后未重新 draw 的首页若沿用旧绝对坐标会画错洞位置）。
+            // 新手引导**只能**由首页「新手引导」按钮主动开启（StartGuide）。
+            // 这里刻意不做任何自动弹出：启动、刷新、首次进入首页、从其他页
+            // 切回首页都不展示引导内容，guide_done 也不再参与显示判定。
+            // 因此切页不会凭空制造 StartGuide 消息，其它操作也无法误触发。
+            // 离开首页仍收起引导并清空过期的目标坐标（窗口 resize / DPI
+            // 变化后未重新 draw 的首页若沿用旧绝对坐标会画错气泡锚点）。
             if page != Page::Home {
                 app.guide_step = None;
                 ui::guide::clear();

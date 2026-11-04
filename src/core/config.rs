@@ -121,7 +121,9 @@ pub struct Config {
     pub plugin_dir: Option<String>,
     pub api_url: String,
     pub seen_onboarding: bool,
-    /// 首页分步新手引导：完成后或选择「不再显示」后不再自动弹出
+    /// 首页分步新手引导的历史标记：完成 /「不再显示」时写入。
+    /// 仅保留兼容旧配置与关闭行为；引导已改为「仅点按钮开启」，此字段
+    /// 不再参与任何显示判定。
     #[serde(default)]
     pub guide_done: bool,
     pub id: IdConfig,

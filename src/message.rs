@@ -552,16 +552,17 @@ pub enum HomeMessage {
     OpenPhoto,
     LoadSample,
     ResetParams,
+    /// 新手引导：**唯一开启入口**，仅由首页「新手引导」按钮发出
     StartGuide,
     /// 新手引导：上一步
     GuidePrev,
-    /// 新手引导：下一步（末步即完成，写入 guide_done）
+    /// 新手引导：下一步（末步即完成，写入 guide_done 历史标记）
     GuideNext,
-    /// 新手引导：跳过（仅关闭，下次进首页仍会提示）
+    /// 新手引导：跳过（仅关闭，不写 guide_done；再次开启只能点按钮）
     GuideSkip,
-    /// 新手引导：不再显示（关闭并持久化记忆）
+    /// 新手引导：不再显示（关闭并持久化历史标记；已无自动弹出逻辑）
     GuideNever,
-    /// 新手引导：点击侧栏步骤项直接跳转到该步
+    /// 新手引导：跳到指定步（仅引导进行中生效，不会从关闭态开启）
     GuideGoto(usize),
 }
 
