@@ -185,6 +185,101 @@ fn set_row<'a>(
     .into()
 }
 
+/* ═════════════════ 大卡片（Section）组件 ═════════════════ */
+
+/// 大卡片内的一行：沿用 `set_row` 的「标签 / 说明 + 右侧控件」结构，
+/// 但不带独立边框与阴影——边框由 [`section_card`] 统一提供，行间只用
+/// 1px `LINE_SOFT` 分隔，避免「每个设置项都是一张卡」的碎片感。
+/// 行内控件、消息与持久化行为完全不变。
+fn section_row<'a>(
+    label: &'a str,
+    desc: impl Into<String>,
+    right: Element<'a, Message>,
+) -> Element<'a, Message> {
+    container(
+        row![
+            column![
+                text(label).size(FS).color(TXT()),
+                text(desc.into()).size(FS_XS).color(TXT3()),
+            ]
+            .spacing(4)
+            .width(Length::Fill),
+            right,
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center),
+    )
+    // 左右内边距由大卡片的 CARD_PAD 提供，这里只留上下呼吸
+    .padding(pad(SP_4, 0.0, SP_4, 0.0))
+    .width(Length::Fill)
+    .into()
+}
+
+/// 模型库内的类别小节：加粗标题 + 描述 + 右侧数量徽标。
+/// 刻意不加背景/边框，否则又会退化成「一类一张卡」。
+fn section_subhead<'a>(
+    label: &'a str,
+    desc: &'a str,
+    right: Element<'a, Message>,
+) -> Element<'a, Message> {
+    container(
+        row![
+            column![
+                text(label).size(FS).color(TXT()).font(bold_font()),
+                text(desc).size(FS_XS).color(TXT3()),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            right,
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center),
+    )
+    .padding(pad(10.0, 0.0, 6.0, 0.0))
+    .width(Length::Fill)
+    .into()
+}
+
+/// 大卡片：标题（+ 可选右侧主操作）+ 若干行，行间 1px 分隔线。
+///
+/// 只在视图层做视觉分组：不新增状态、不改消息、不在卡片内嵌套
+/// `scrollable`（外层 `panel_wrap` 已是一层垂直滚动，iced 0.14 嵌套
+/// 滚动会让 `Length::Fill` 尺寸失真）。
+fn section_card<'a>(
+    title: &'a str,
+    action: Option<Element<'a, Message>>,
+    rows: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let mut head =
+        row![text(title).size(FS_H).color(TXT()).font(bold_font())].align_y(Alignment::Center);
+    if let Some(a) = action {
+        head = head.push(Space::new().width(Length::Fill)).push(a);
+    }
+
+    let mut inner: iced::widget::Column<'a, Message> =
+        column![head, Space::new().height(8.0)].spacing(0);
+    for (i, r) in rows.into_iter().enumerate() {
+        if i > 0 {
+            inner = inner.push(
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(|_t| iced::widget::container::Style {
+                        background: Some(iced::Background::Color(LINE_SOFT())),
+                        ..iced::widget::container::Style::default()
+                    }),
+            );
+        }
+        inner = inner.push(r);
+    }
+
+    container(inner)
+        .padding(pad_all(CARD_PAD))
+        .width(Length::Fill)
+        .style(card)
+        .into()
+}
+
 fn panel_wrap(title: String, content: Element<'_, Message>) -> Element<'_, Message> {
     container(
         scrollable(
@@ -202,8 +297,10 @@ fn panel_wrap(title: String, content: Element<'_, Message>) -> Element<'_, Messa
 
 fn engine_panel<'a>(app: &'a App) -> Element<'a, Message> {
     let has_modnet = app.work.nn_models.iter().any(|m| m.file == "modnet.onnx");
-    let mut col = column![
-        set_row(
+
+    /* ① 引擎配置：可编辑项 + 底部「恢复默认参数」动作 */
+    let config_rows: Vec<Element<'a, Message>> = vec![
+        section_row(
             tr("抠图模型"),
             tr("经典算法为纯色 / 白底商品图设计，毫秒级；神经网络模型经 ONNX Runtime 本地推理。"),
             container(
@@ -213,21 +310,41 @@ fn engine_panel<'a>(app: &'a App) -> Element<'a, Message> {
                     |m| Message::Settings(SettingsMessage::SetModel(m)),
                 )
                 .width(Length::Fixed(262.0))
-                .style(pick_list_style).text_size(FS_SM).menu_style(menu_style),
+                .style(pick_list_style)
+                .text_size(FS_SM)
+                .menu_style(menu_style),
             )
             .into(),
         ),
-        set_row(
+        section_row(
             tr("自动重算"),
             tr("调整参数后即时重新推理；关闭后需手动切换模型触发。"),
-            switch_btn(app.config.auto, Message::Settings(SettingsMessage::ToggleAuto(!app.config.auto))),
+            switch_btn(
+                app.config.auto,
+                Message::Settings(SettingsMessage::ToggleAuto(!app.config.auto)),
+            ),
         ),
-        set_row(
+        section_row(
+            tr("蒙版参数"),
+            tr("取样阈值 / 边缘宽容 / 羽化 / 形态学等参数见「抠图工具」右侧检查器。"),
+            container(
+                button(text(tr("恢复默认参数")).size(FS_SM))
+                    .on_press(Message::Settings(SettingsMessage::ResetParams))
+                    .padding(pad(6.0, 12.0, 6.0, 12.0))
+                    .style(btn_secondary),
+            )
+            .into(),
+        ),
+    ];
+
+    /* ② 运行时状态：只读诊断信息（徽标状态与文案原样保留） */
+    let status_rows: Vec<Element<'a, Message>> = vec![
+        section_row(
             tr("推理运行时"),
             tr("ONNX Runtime（load-dynamic）：Windows 优先 DirectML GPU 执行，未安装运行库时回退 CPU。"),
             badge(tr("本地推理"), BadgeKind::Ok),
         ),
-        set_row(
+        section_row(
             "MODNet",
             if has_modnet {
                 tr("人像发丝级模型（models/modnet.onnx）已就绪，证件照页自动优先使用。")
@@ -240,78 +357,83 @@ fn engine_panel<'a>(app: &'a App) -> Element<'a, Message> {
                 badge(tr("未就绪"), BadgeKind::Warn)
             },
         ),
-        set_row(
+        section_row(
             tr("人脸检测模型"),
             tr("YuNet 权重在原项目中已判定不可用，原生版同样不启用。"),
             badge(tr("已停用"), BadgeKind::Warn),
         ),
-    ]
-    .spacing(10);
-
-    // 已扫描到的模型清单（与工作台「引擎」面板同一份数据）
-    col = col.push(
-        set_row(
-            tr("模型清单"),
-            match (&app.work.models_dir, app.work.nn_models.len()) {
-                (Some(d), n) => trf("目录 {} · 发现 {} 个模型", &[&d.display().to_string(), &n.to_string()]),
-                (None, _) => tr("models/ 目录不存在，点击「重新扫描」或把 .onnx 放入该目录").to_string(),
-            },
-            container(
-                button(text(tr("重新扫描")).size(FS_SM))
-                    .on_press(Message::Settings(SettingsMessage::RescanModels))
-                    .padding(pad(6.0, 12.0, 6.0, 12.0))
-                    .style(btn_secondary),
-            )
-            .into(),
+        section_row(
+            tr("内存提示"),
+            tr("蒙版计算按像素流式处理，峰值内存约为图像 RGBA 的 3~4 倍。超大图请先缩小。"),
+            Space::new().width(1.0).into(),
         ),
-    );
-    // 按类别分组展示模型清单
-    let mut categories: Vec<ModelCategory> = app.work.nn_models.iter()
+    ];
+
+    /* ③ 模型库：清单摘要 + 按类别分组的模型条目（类别标题降为卡内小节） */
+    let mut model_rows: Vec<Element<'a, Message>> = vec![section_row(
+        tr("模型清单"),
+        match (&app.work.models_dir, app.work.nn_models.len()) {
+            (Some(d), n) => trf(
+                "目录 {} · 发现 {} 个模型",
+                &[&d.display().to_string(), &n.to_string()],
+            ),
+            (None, _) => {
+                tr("models/ 目录不存在，点击「重新扫描」或把 .onnx 放入该目录").to_string()
+            }
+        },
+        Space::new().width(1.0).into(),
+    )];
+    // 与工作台「引擎」面板同一份数据，类别排序 / 去重 / 过滤逻辑不变
+    let mut categories: Vec<ModelCategory> = app
+        .work
+        .nn_models
+        .iter()
         .map(|m| crate::core::nn::model_category(&m.file))
         .collect();
     categories.sort();
     categories.dedup();
     for cat in &categories {
-        let models_in_cat: Vec<&crate::core::nn::NnModelInfo> = app.work.nn_models.iter()
+        let models_in_cat: Vec<&crate::core::nn::NnModelInfo> = app
+            .work
+            .nn_models
+            .iter()
             .filter(|m| crate::core::nn::model_category(&m.file) == *cat)
             .collect();
         if models_in_cat.is_empty() {
             continue;
         }
-        col = col.push(set_row(
+        model_rows.push(section_subhead(
             cat.label(),
             cat.desc(),
             badge(format!("{}", models_in_cat.len()), BadgeKind::Dim),
         ));
         for m in &models_in_cat {
-            col = col.push(set_row(
+            model_rows.push(section_row(
                 &m.label,
-                trf("{} MB · 输入 {}px", &[&format!("{:.1}", m.size_mb), &m.input_size.to_string()]),
+                trf(
+                    "{} MB · 输入 {}px",
+                    &[&format!("{:.1}", m.size_mb), &m.input_size.to_string()],
+                ),
                 Space::new().width(1.0).into(),
             ));
         }
     }
 
-    col = col.push(
-        set_row(
-            tr("内存提示"),
-            tr("蒙版计算按像素流式处理，峰值内存约为图像 RGBA 的 3~4 倍。超大图请先缩小。"),
-            Space::new().width(1.0).into(),
-        ),
-    );
-    col = col.push(
-        set_row(
-            tr("蒙版参数"),
-            tr("取样阈值 / 边缘宽容 / 羽化 / 形态学等参数见「抠图工具」右侧检查器。"),
-            container(
-                button(text(tr("恢复默认参数")).size(FS_SM))
-                    .on_press(Message::Settings(SettingsMessage::ResetParams))
-                    .padding(pad(6.0, 12.0, 6.0, 12.0))
-                    .style(btn_secondary),
-            )
-            .into(),
-        ),
-    );
+    // 「重新扫描」提升到模型库卡片头部，仍是原来的 RescanModels 消息
+    let rescan_action: Element<'a, Message> = container(
+        button(text(tr("重新扫描")).size(FS_SM))
+            .on_press(Message::Settings(SettingsMessage::RescanModels))
+            .padding(pad(6.0, 12.0, 6.0, 12.0))
+            .style(btn_secondary),
+    )
+    .into();
+
+    let col = column![
+        section_card(tr("引擎配置"), None, config_rows),
+        section_card(tr("运行时状态"), None, status_rows),
+        section_card(tr("模型库"), Some(rescan_action), model_rows),
+    ]
+    .spacing(10);
 
     panel_wrap(tr("模型与推理引擎").to_string(), col.into())
 }
