@@ -610,6 +610,15 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.4",
+            "2026-11-04",
+            tr("新功能"),
+            &[
+                tr("新手引导升级为聚焦式（Spotlight）：遮罩挖洞高亮当前步骤的目标控件，说明气泡锚定在控件旁"),
+                tr("引导支持点击穿透：点遮罩空白处翻到下一步，点洞内目标（如「开始」卡）直接触发该操作，边做边学"),
+            ],
+        ),
+        (
             "0.4.3",
             "2026-11-03",
             tr("改进"),

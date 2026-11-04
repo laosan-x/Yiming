@@ -126,6 +126,8 @@
   "教资 / 四六级": "Teacher cert / CET",
   "数据存储": "Data storage",
   "新功能": "New",
+  "新手引导升级为聚焦式（Spotlight）：遮罩挖洞高亮当前步骤的目标控件，说明气泡锚定在控件旁": "Onboarding is now spotlight-style: the mask cuts a hole to highlight the current step's target control, with the tooltip anchored beside it",
+  "引导支持点击穿透：点遮罩空白处翻到下一步，点洞内目标（如「开始」卡）直接触发该操作，边做边学": "Clicks pass through the mask: tap empty area to advance to the next step, or tap the highlighted target (e.g. the Start card) to trigger that action directly",
   "新增 20 种证件规格与 7 种标准底色": "Added 20 ID specs and 7 official background colors",
   "新增 Tauri 2 桌面端与 platform 适配层": "Added Tauri 2 desktop shell and platform layer",
   "新增「证件照」页面：上传 → 抠图换底 → 规格构图出图 → 相纸排版导出": "New ID Photo page: upload → recolor → spec compose → paper layout export",

@@ -264,6 +264,8 @@ const EN: &[(&str, &str)] = &[
     ("教资 / 四六级", "Teacher cert / CET"),
     ("数据存储", "Data storage"),
     ("新功能", "New"),
+    ("新手引导升级为聚焦式（Spotlight）：遮罩挖洞高亮当前步骤的目标控件，说明气泡锚定在控件旁", "Onboarding is now spotlight-style: the mask cuts a hole to highlight the current step's target control, with the tooltip anchored beside it"),
+    ("引导支持点击穿透：点遮罩空白处翻到下一步，点洞内目标（如「开始」卡）直接触发该操作，边做边学", "Clicks pass through the mask: tap empty area to advance to the next step, or tap the highlighted target (e.g. the Start card) to trigger that action directly"),
     ("改进", "Improved"),
     ("修复", "Fixes"),
     ("更新包下载支持多源镜像回退：GitHub 主源失败自动切换境内可达镜像，下载不再受单源波动影响", "Update downloads now fall back to China-reachable mirrors when the GitHub source fails, no longer affected by a single source"),
