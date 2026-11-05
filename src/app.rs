@@ -254,6 +254,8 @@ pub struct WorkState {
     /// 上一次落笔的图像坐标（用于拖动时插值补点）
     pub last_paint: Option<(f32, f32)>,
     pub picker_at: Option<iced::Point>,
+    /// 吸管悬停处取样的颜色（原图坐标越界 / 非吸管工具时为 None）
+    pub picker_hover: Option<[u8; 3]>,
     /// 蒙版合成提交的序列号：每次异步 `refresh_result` 自增，回传 `ResultCommitted`
     /// 时比对，丢弃因快速重复提交而落后的过期帧（参考 IdMessage::RenderDone）。
     pub refresh_seq: u64,
@@ -325,6 +327,7 @@ impl Default for WorkState {
             brush_cursor: None,
             last_paint: None,
             picker_at: None,
+            picker_hover: None,
             refresh_seq: 0,
             custom_hex: "#FFFFFF".into(),
             batch: Vec::new(),

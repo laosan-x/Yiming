@@ -32,14 +32,18 @@
 use std::cell::RefCell;
 
 use iced::advanced::image::{Allocation, Id, Renderer as ImageRenderer};
+use iced::advanced::text::Alignment;
+use iced::alignment::Vertical;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::image::Handle;
 use iced::widget::stack;
-use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{
+    Color, Element, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector,
+};
 
 use crate::message::{Message, Tool};
-use crate::theme::{ACC, CHECKER_A, CHECKER_B, CHECKER_CELL, INK, LINE, TXT2, TXT3};
+use crate::theme::{ACC, CHECKER_A, CHECKER_B, CHECKER_CELL, INK, LINE, LINE_SOFT, TXT, TXT2};
 use crate::core::i18n::tr;
 
 /// 屏幕坐标下的矩形（裁剪框）
@@ -507,7 +511,7 @@ impl<'a> StageView<'a> {
     }
 }
 
-/// 覆盖层：图片外轮廓 / 对比分割线与角标 / 裁剪遮罩 / 笔刷光标 / 吸管十字
+/// 覆盖层：图片外轮廓 / 对比分割线与角标 / 裁剪遮罩 / 笔刷光标 / 吸管圆环取色器
 ///
 /// 单独一个 `Canvas`、由 `stack!` 放进独立 layer，才能绘制在图片之上。
 /// 它不做任何事件处理（`update` / `mouse_interaction` 用 trait 默认实现）。
@@ -518,8 +522,10 @@ pub struct StageOverlay {
     pub crop: Option<Rect>,
     /// 笔刷光标（位置 + 半径）
     pub brush: Option<(Point, f32)>,
-    /// 吸管十字（位置）
+    /// 吸管光标（位置）
     pub picker: Option<Point>,
+    /// 吸管悬停处取样的颜色：None 时圆环退化为空心（光标在图片外）
+    pub picker_hover: Option<[u8; 3]>,
     /// 是否正处于「按下涂抹」状态（用于画半透明笔刷足迹预览）
     pub painting: bool,
     /// 当前涂抹模式是否为橡皮擦（决定预览足迹的明暗）
@@ -557,6 +563,7 @@ struct OverlaySig {
     crop: Option<Rect>,
     brush: Option<(i32, i32, i32)>,
     picker: Option<(i32, i32)>,
+    picker_hover: Option<(i32, i32, i32)>,
     painting: bool,
     erase: bool,
     iw: i32,
@@ -582,6 +589,9 @@ impl OverlaySig {
             picker: p
                 .picker
                 .map(|pt| ((pt.x * 4.0) as i32, (pt.y * 4.0) as i32)),
+            picker_hover: p
+                .picker_hover
+                .map(|c| (c[0] as i32, c[1] as i32, c[2] as i32)),
             painting: p.painting,
             erase: p.erase,
             iw: p.geom.img_size.0 as i32,
@@ -782,21 +792,77 @@ impl StageOverlay {
             );
         }
 
-        // ── 吸管十字 ──
+        // ── 吸管圆环取色器：黑白双描边（与笔刷光标同视觉语言）+ 环内实时
+        //    填充悬停色 + 中心取样点标记 + hex 色值气泡。悬停色缺失（光标
+        //    在图片外）时退化为空心环，不再画旧版十字。 ──
         if let Some(p) = self.picker {
-            let s = Stroke {
-                style: canvas::Style::Solid(TXT3()),
-                width: 1.0,
-                ..Stroke::default()
-            };
+            const RING_R: f32 = 15.0;
+            if let Some([r, g, b]) = self.picker_hover {
+                frame.fill(
+                    &Path::circle(p, RING_R - 2.4),
+                    Color::from_rgba8(r, g, b, 0.92),
+                );
+            }
             frame.stroke(
-                &Path::line(Point::new(p.x - 9.0, p.y), Point::new(p.x + 9.0, p.y)),
-                s,
+                &Path::circle(p, RING_R),
+                Stroke {
+                    style: canvas::Style::Solid(Color::BLACK),
+                    width: 3.2,
+                    ..Stroke::default()
+                },
             );
             frame.stroke(
-                &Path::line(Point::new(p.x, p.y - 9.0), Point::new(p.x, p.y + 9.0)),
-                s,
+                &Path::circle(p, RING_R - 1.5),
+                Stroke {
+                    style: canvas::Style::Solid(Color::WHITE),
+                    width: 1.3,
+                    ..Stroke::default()
+                },
             );
+            // 中心取样点：白色实心 + 细黑描边，标记 1px 取样位置
+            frame.fill(&Path::circle(p, 2.4), Color::WHITE);
+            frame.stroke(
+                &Path::circle(p, 2.4),
+                Stroke {
+                    style: canvas::Style::Solid(Color::BLACK),
+                    width: 0.8,
+                    ..Stroke::default()
+                },
+            );
+            // hex 色值气泡：默认悬于右上，贴近右缘翻到左侧、贴近顶缘落到下方
+            if let Some([r, g, b]) = self.picker_hover {
+                let (chip_w, chip_h) = (80.0, 21.0);
+                let mut dx = 20.0;
+                let mut dy = -38.0;
+                if p.x + dx + chip_w > bounds.width - 4.0 {
+                    dx = -dx - chip_w;
+                }
+                if p.y + dy < 4.0 {
+                    dy = 24.0;
+                }
+                let top_left = Point::new(p.x + dx, p.y + dy);
+                let chip = Path::rounded_rectangle(top_left, Size::new(chip_w, chip_h), 4.0.into());
+                frame.fill(&chip, Color::from_rgba(1.0, 1.0, 1.0, 0.96));
+                frame.stroke(
+                    &chip,
+                    Stroke {
+                        style: canvas::Style::Solid(LINE_SOFT()),
+                        width: 1.0,
+                        ..Stroke::default()
+                    },
+                );
+                frame.fill_text(canvas::Text {
+                    content: format!("#{:02X}{:02X}{:02X}", r, g, b),
+                    position: Point::new(top_left.x + chip_w / 2.0, top_left.y + chip_h / 2.0),
+                    max_width: chip_w - 8.0,
+                    color: TXT(),
+                    size: Pixels(11.5),
+                    font: Font::MONOSPACE,
+                    align_x: Alignment::Center,
+                    align_y: Vertical::Center,
+                    ..Default::default()
+                });
+            }
         }
     }
 }

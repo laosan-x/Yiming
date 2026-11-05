@@ -314,6 +314,10 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         /* ── 工具与参数 ── */
         WorkMessage::SetTool(t) => {
             app.work.tool = t;
+            if t != Tool::Picker {
+                // 离开吸管时清掉悬停取样色，避免覆盖层残留旧环
+                app.work.picker_hover = None;
+            }
             // 切到保留 / 擦除画笔时自动展开「笔刷属性」面板；切到其他工具时自动收起
             app.work.brush_props_open = matches!(t, Tool::Keep | Tool::Erase);
             if t != Tool::Crop {
@@ -816,6 +820,9 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                 None
             };
             app.work.picker_at = if app.work.tool == Tool::Picker { Some(screen) } else { None };
+            // 悬停实时取样：圆环内填充 + hex 气泡的数据源（1px 读取，开销可忽略）
+            app.work.picker_hover =
+                if app.work.tool == Tool::Picker { sample_at(app, p) } else { None };
             
             // 裁剪工具吸附功能：当鼠标接近控制点时吸附到控制点
             let snap_distance = 15.0; // 吸附距离（像素）
@@ -1042,6 +1049,7 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         WorkMessage::StageLeave => {
             app.work.brush_cursor = None;
             app.work.picker_at = None;
+            app.work.picker_hover = None;
             return Task::none();
         }
 
@@ -1461,6 +1469,18 @@ fn pick_color(app: &mut App, p: (f32, f32)) {
     app.work.custom_hex = format!("#{:02X}{:02X}{:02X}", px[0], px[1], px[2]);
     app.persist();
     app.toast(trf("已取样 {}", &[&app.work.custom_hex]));
+}
+
+/// 吸管悬停实时取样：图像坐标越界 / 无图时返回 None（圆环退化为空心）
+fn sample_at(app: &App, p: (f32, f32)) -> Option<[u8; 3]> {
+    let src = app.work.src.as_ref()?;
+    let x = p.0.round() as i64;
+    let y = p.1.round() as i64;
+    if x < 0 || y < 0 || x >= src.width() as i64 || y >= src.height() as i64 {
+        return None;
+    }
+    let px = src.get_pixel(x as u32, y as u32).0;
+    Some([px[0], px[1], px[2]])
 }
 
 fn fit_to_window(w: &mut WorkState) {
@@ -1885,7 +1905,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
                         };
                         (p, radius)
                     }),
-                picker: w.picker_at,
+                picker: if w.tool == Tool::Picker { w.picker_at } else { None },
+                picker_hover: if w.tool == Tool::Picker { w.picker_hover } else { None },
                 painting: w.drag == Some(Drag::Paint),
                 erase: w.tool == Tool::Erase,
             },
