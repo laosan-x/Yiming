@@ -51,6 +51,19 @@ jobs:
       - name: Gate — release version consistency
         run: python scripts/check-release.py
 
+      # 与 ci.yml 的「Prepare test assets」保持一致（tag push 不触发 ci.yml）。
+      # 干净 runner 上没有 models/u2netp.onnx 与 ort-libs/onnxruntime.dll，
+      # 缺这两样时带 ONNX 冒烟测试的 cargo test 会失败（v0.4.5 首次发版实测）。
+      - name: Prepare test assets (u2netp model + onnxruntime dll)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models, ort-libs | Out-Null
+          curl.exe -sSL --retry 3 -o models/u2netp.onnx https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx
+          $ver = "1.22.0"
+          curl.exe -sSL --retry 3 -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-x64-$ver.zip"
+          Expand-Archive ort.zip -DestinationPath ort-tmp -Force
+          Copy-Item "ort-tmp/onnxruntime-win-x64-$ver/lib/onnxruntime.dll" ort-libs/
+
       # ci.yml 只在 push main / PR 时触发，tag push 不触发。发版必须自带门禁，
       # 否则打错 commit 或测试挂掉仍会照常发布。
       - name: Gate — cargo test
