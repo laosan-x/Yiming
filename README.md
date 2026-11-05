@@ -10,7 +10,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)](#系统要求)
 [![Rust](https://img.shields.io/badge/Rust-1.82%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/GUI-iced%200.14-purple)](https://github.com/iced-rs/iced)
-[![Release](https://img.shields.io/badge/Version-0.4.4-green)](#安装)
+[![Release](https://img.shields.io/badge/Version-0.4.5-green)](#安装)
 
 </div>
 
@@ -82,7 +82,7 @@
 
 前往 [**Releases**](https://github.com/laosan-x/Yiming/releases) 下载最新安装包：
 
-- `cocole-iced-v0.4.4-setup.exe` —— NSIS 安装器，双击安装（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 40 MB）
+- `cocole-iced-v0.4.5-setup.exe` —— NSIS 安装器，双击安装（内置 3 个轻量模型：YuNet 人脸检测 / MODNet / U²-NetP，约 40 MB）
 
 > **大模型按需加载**：高精度模型（BiRefNet 927 MB / BEN2 212 MB / InSPyReNet 170 MB）不随安装包分发。
 > 在安装目录（或仓库根目录）执行 `powershell -ExecutionPolicy Bypass -File models\download.ps1` 下载后放入 `models/` 文件夹，应用会自动识别新模型。
