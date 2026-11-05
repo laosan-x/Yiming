@@ -523,5 +523,8 @@
   "不支持缩略图的文件类型": "Preview not supported for this file type",
   "无法在编辑窗口打开：{}": "Cannot open in editor: {}",
   "批量导出相纸排版": "Export print layout in batch",
-  "开启后每张原图各出一页相纸 JPG（含裁剪线、间距与排版）；关闭则按「单张格式」导出单张证件照。": "On: each source photo produces one print-layout JPG (cut lines, gaps and layout included). Off: export single ID photos using the Single format setting."
+  "开启后每张原图各出一页相纸 JPG（含裁剪线、间距与排版）；关闭则按「单张格式」导出单张证件照。": "On: each source photo produces one print-layout JPG (cut lines, gaps and layout included). Off: export single ID photos using the Single format setting.",
+  "批量队列升级：每个文件项显示缩略图，点击即可在编辑窗口打开并高亮同步（工作台与证件照页）": "Batch queue upgrade: file items now show thumbnails; click one to open it in the editor with synced highlight (Workbench and ID Photo pages)",
+  "证件照批量队列移入右侧侧栏，不再挤压预览舞台": "ID Photo batch queue moved into the right sidebar, no longer squeezing the preview stage",
+  "证件照批量导出支持相纸排版：每张原图一页含裁剪线的相纸 JPG，排版参数在导出启动时快照": "ID Photo batch export supports print layout: one cut-line print sheet JPG per source photo, layout parameters snapshotted when the export starts"
 }
