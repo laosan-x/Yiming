@@ -447,83 +447,120 @@ fn backend_panel<'a>(app: &'a App) -> Element<'a, Message> {
         Some(false) => tr("检测失败，使用默认值 96").to_string(),
         None => tr("尚未检测").to_string(),
     };
-    let c = container(
-        column![
-            set_row(
-                tr("计算后端"),
-                tr("色键抠图在 CPU（纯 Rust + rayon 并行）；ONNX 模型推理由 ONNX Runtime 执行，Windows 下优先 DirectML GPU 执行提供程序，缺失时自动回退 CPU。"),
-                badge("CPU + DirectML", BadgeKind::Ok),
-            ),
-            set_row(
-                tr("并行度"),
-                trf(
-                    "可用并行度 {}（由 std::thread::available_parallelism 探测）",
-                     &[&std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1).to_string()],
+    // 「刷新」保留在 DPI 行内（它只刷新 DPI 探测，放卡头会让人误以为是全局刷新）
+    panel_wrap(
+        tr("计算后端").to_string(),
+        section_card(
+            tr("运行环境"),
+            None,
+            vec![
+                section_row(
+                    tr("计算后端"),
+                    tr("色键抠图在 CPU（纯 Rust + rayon 并行）；ONNX 模型推理由 ONNX Runtime 执行，Windows 下优先 DirectML GPU 执行提供程序，缺失时自动回退 CPU。"),
+                    badge("CPU + DirectML", BadgeKind::Ok),
                 ),
-                Space::new().width(1.0).into(),
-            ),
-            set_row(
-                tr("屏幕 DPI"),
-                dpi_info,
-                container(
-                    button(row![icon("refresh", 13.0, TXT2()), text(tr("刷新")).size(FS_SM)].spacing(5).align_y(Alignment::Center))
-                        .on_press(Message::Settings(SettingsMessage::RefreshDpi))
-                        .padding(pad(5.0, 10.0, 5.0, 10.0))
-                        .style(btn_secondary),
-                )
-                .into(),
-            ),
-        ]
-        .spacing(10),
+                section_row(
+                    tr("并行度"),
+                    trf(
+                        "可用并行度 {}（由 std::thread::available_parallelism 探测）",
+                        &[&std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1).to_string()],
+                    ),
+                    Space::new().width(1.0).into(),
+                ),
+                section_row(
+                    tr("屏幕 DPI"),
+                    dpi_info,
+                    container(
+                        button(row![icon("refresh", 13.0, TXT2()), text(tr("刷新")).size(FS_SM)].spacing(5).align_y(Alignment::Center))
+                            .on_press(Message::Settings(SettingsMessage::RefreshDpi))
+                            .padding(pad(5.0, 10.0, 5.0, 10.0))
+                            .style(btn_secondary),
+                    )
+                    .into(),
+                ),
+            ],
+        ),
     )
-    .into();
-    panel_wrap(tr("计算后端").to_string(), c)
 }
 
 fn plugin_panel<'a>(app: &'a App) -> Element<'a, Message> {
-    let mut col = column![].spacing(10);
-
-    col = col.push(
-        set_row(
+    /* ── 卡① 模型目录与扫描：目录配置 + 「重新扫描」提升到卡头 ── */
+    let dir_rows = vec![
+        section_row(
             tr("模型目录"),
             match &app.work.models_dir {
                 Some(d) => trf("启动时自动扫描 {}，发现的 .onnx 可在证件照 / 引擎面板直接选用", &[d.display().to_string().as_str()]),
                 None => tr("models/ 目录不存在：在工作目录创建 models/ 并放入 .onnx 后点击「重新扫描」").to_string(),
             },
-            container(
-                button(text(tr("重新扫描")).size(FS_SM))
-                    .on_press(Message::Settings(SettingsMessage::RescanModels))
-                    .padding(pad(6.0, 12.0, 6.0, 12.0))
-                    .style(btn_secondary),
-            )
-            .into(),
+            Space::new().width(1.0).into(),
         ),
-    );
+        // 记录用的插件目录（保留原设置项）
+        section_row(
+            tr("外置插件目录"),
+            tr("指定额外目录后，点击「重新扫描」即可将外置 .onnx 模型加入清单。同名文件以主模型目录为准。"),
+            {
+                let dir = app
+                    .config
+                    .plugin_dir
+                    .clone()
+                    .unwrap_or_else(|| tr("未设置插件目录").to_string());
+                container(
+                    row![
+                        text(dir).size(FS_SM).color(TXT2()),
+                        Space::new().width(8.0),
+                        button(text(tr("选择目录…")).size(FS_SM))
+                            .on_press(Message::Settings(SettingsMessage::PickPluginDir))
+                            .padding(pad(5.0, 10.0, 5.0, 10.0))
+                            .style(btn_secondary),
+                    ]
+                    .align_y(Alignment::Center),
+                )
+                .into()
+            },
+        ),
+    ];
+    let rescan_action: Element<'a, Message> = container(
+        button(text(tr("重新扫描")).size(FS_SM))
+            .on_press(Message::Settings(SettingsMessage::RescanModels))
+            .padding(pad(6.0, 12.0, 6.0, 12.0))
+            .style(btn_secondary),
+    )
+    .into();
 
+    /* ── 卡② 已发现模型：与引擎面板「模型库」同一份数据与行组件 ── */
+    let mut model_rows: Vec<Element<'a, Message>> = Vec::new();
     if app.work.nn_models.is_empty() {
-        col = col.push(set_row(
+        model_rows.push(section_row(
             tr("已发现模型"),
             tr("无 —— 目录为空或尚未扫描"),
             Space::new().width(1.0).into(),
         ));
     } else {
-        let mut cats: Vec<ModelCategory> = app.work.nn_models.iter()
+        let mut cats: Vec<ModelCategory> = app
+            .work
+            .nn_models
+            .iter()
             .map(|m| crate::core::nn::model_category(&m.file))
             .collect();
         cats.sort();
         cats.dedup();
         for cat in &cats {
-            let in_cat: Vec<&crate::core::nn::NnModelInfo> = app.work.nn_models.iter()
+            let in_cat: Vec<&crate::core::nn::NnModelInfo> = app
+                .work
+                .nn_models
+                .iter()
                 .filter(|m| crate::core::nn::model_category(&m.file) == *cat)
                 .collect();
-            if in_cat.is_empty() { continue; }
-            col = col.push(set_row(
+            if in_cat.is_empty() {
+                continue;
+            }
+            model_rows.push(section_subhead(
                 cat.label(),
                 cat.desc(),
                 badge(format!("{}", in_cat.len()), BadgeKind::Dim),
             ));
             for m in &in_cat {
-                col = col.push(set_row(
+                model_rows.push(section_row(
                     &m.label,
                     trf("{} MB · 输入 {}px", &[&format!("{:.1}", m.size_mb), &m.input_size.to_string()]),
                     badge("ONNX", BadgeKind::Ok),
@@ -532,30 +569,13 @@ fn plugin_panel<'a>(app: &'a App) -> Element<'a, Message> {
         }
     }
 
-    // 记录用的插件目录（保留原设置项）
-    let dir = app
-        .config
-        .plugin_dir
-        .clone()
-        .unwrap_or_else(|| tr("未设置插件目录").to_string());
-    col = col.push(set_row(
-        tr("外置插件目录"),
-        tr("指定额外目录后，点击「重新扫描」即可将外置 .onnx 模型加入清单。同名文件以主模型目录为准。"),
-        container(
-            row![
-                text(dir).size(FS_SM).color(TXT2()),
-                Space::new().width(8.0),
-                button(text(tr("选择目录…")).size(FS_SM))
-                    .on_press(Message::Settings(SettingsMessage::PickPluginDir))
-                    .padding(pad(5.0, 10.0, 5.0, 10.0))
-                    .style(btn_secondary),
-            ]
-            .align_y(Alignment::Center),
-        )
-        .into(),
-    ));
+    let col = column![
+        section_card(tr("模型目录与扫描"), Some(rescan_action), dir_rows),
+        section_card(tr("已发现模型"), None, model_rows),
+    ]
+    .spacing(10);
 
-    panel_wrap(tr("模型插件").to_string(), container(col).into())
+    panel_wrap(tr("模型插件").to_string(), col.into())
 }
 
 fn remote_panel<'a>(app: &'a App) -> Element<'a, Message> {
@@ -587,41 +607,43 @@ fn remote_panel<'a>(app: &'a App) -> Element<'a, Message> {
 }
 
 fn export_panel<'a>(app: &'a App) -> Element<'a, Message> {
-    let c = container(
-        column![
-            set_row(
-                tr("格式"),
-                tr("PNG 保留透明通道，JPG 体积最小但会强制白底。"),
-                container(
-                    pick_list(
-                        ExportFormat::all(),
-                        Some(app.config.export_format()),
-                        |f| Message::Settings(SettingsMessage::SetFormat(f)),
+    panel_wrap(
+        tr("导出默认值").to_string(),
+        section_card(
+            tr("导出默认值"),
+            None,
+            vec![
+                section_row(
+                    tr("格式"),
+                    tr("PNG 保留透明通道，JPG 体积最小但会强制白底。"),
+                    container(
+                        pick_list(
+                            ExportFormat::all(),
+                            Some(app.config.export_format()),
+                            |f| Message::Settings(SettingsMessage::SetFormat(f)),
+                        )
+                        .width(Length::Fixed(262.0))
+                        .style(pick_list_style).text_size(FS_SM).menu_style(menu_style),
                     )
-                    .width(Length::Fixed(262.0))
-                    .style(pick_list_style).text_size(FS_SM).menu_style(menu_style),
-                )
-                .into(),
-            ),
-            set_row(
-                tr("导出尺寸"),
-                tr("选择非原始尺寸时，图片会等比缩放并居中放置于方画布。"),
-                container(
-                    pick_list(
-                        ExportSize::all(),
-                        Some(app.config.export_size()),
-                        |s| Message::Settings(SettingsMessage::SetExportSize(s)),
+                    .into(),
+                ),
+                section_row(
+                    tr("导出尺寸"),
+                    tr("选择非原始尺寸时，图片会等比缩放并居中放置于方画布。"),
+                    container(
+                        pick_list(
+                            ExportSize::all(),
+                            Some(app.config.export_size()),
+                            |s| Message::Settings(SettingsMessage::SetExportSize(s)),
+                        )
+                        .width(Length::Fixed(262.0))
+                        .style(pick_list_style).text_size(FS_SM).menu_style(menu_style),
                     )
-                    .width(Length::Fixed(262.0))
-                    .style(pick_list_style).text_size(FS_SM).menu_style(menu_style),
-                )
-                .into(),
-            ),
-        ]
-        .spacing(10),
+                    .into(),
+                ),
+            ],
+        ),
     )
-    .into();
-    panel_wrap(tr("导出默认值").to_string(), c)
 }
 
 fn hotkey_panel<'a>(app: &'a App) -> Element<'a, Message> {
@@ -629,12 +651,14 @@ fn hotkey_panel<'a>(app: &'a App) -> Element<'a, Message> {
 
     let keymap = app.config.keymap.resolve();
 
-    let mut col = column![
-        text(tr("快捷键与 Adobe Photoshop 保持一致。文本输入框聚焦时快捷键自动失效。"))
-            .size(FS_SM)
-            .color(TXT3()),
-    ]
-    .spacing(10);
+    // 单张大卡片：说明行在前，随后每个分组一个小节标题 + 绑定行；
+    // 行间 1px 分隔由 section_card 统一绘制，原 PANEL_2 底色小卡取消。
+    let mut rows: Vec<Element<'a, Message>> = vec![text(
+        tr("快捷键与 Adobe Photoshop 保持一致。文本输入框聚焦时快捷键自动失效。"),
+    )
+    .size(FS_SM)
+    .color(TXT3())
+    .into()];
 
     // 分组标题
     let groups = [
@@ -660,31 +684,18 @@ fn hotkey_panel<'a>(app: &'a App) -> Element<'a, Message> {
     ];
 
     for (group, actions) in &groups {
-        col = col.push(text(*group).size(FS).color(TXT()).width(Length::Fill));
+        rows.push(section_subhead(group, "", Space::new().width(1.0).into()));
         for action in actions {
             let binding = keymap.get(action).map(|(m, k)| hotkey::format_binding(m, k)).unwrap_or_default();
-            col = col.push(
-                container(
-                    row![
-                        text(hotkey::action_label(action)).size(FS_SM).color(TXT()).width(Length::Fill),
-                        text(binding).size(FS_SM).color(TXT2()),
-                    ]
-                    .spacing(12)
-                    .align_y(Alignment::Center),
-                )
-                .padding(pad(6.0, 12.0, 6.0, 12.0))
-                .width(Length::Fill)
-                .style(|_t| container::Style {
-                    background: Some(iced::Background::Color(PANEL_2())),
-                    border: iced::Border { radius: 6.0.into(), ..Default::default() },
-                    ..container::Style::default()
-                }),
-            );
+            rows.push(section_row(
+                hotkey::action_label(action),
+                "",
+                text(binding).size(FS_SM).color(TXT2()).into(),
+            ));
         }
-        col = col.push(Space::new().height(8.0));
     }
 
-    panel_wrap(tr("快捷键").to_string(), col.into())
+    panel_wrap(tr("快捷键").to_string(), section_card(tr("快捷键"), None, rows))
 }
 
 fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
@@ -693,40 +704,46 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
     } else {
         app.config.api_url.clone()
     };
-    let c = container(
-        column![
-            kv_row(tr("图片上传").to_string(), tr("从不 · 全程本地处理")),
-            kv_row(tr("数据存储").to_string(), tr("仅本机配置目录的 config.json")),
-            kv_row(tr("后端地址").to_string(), engine_txt.clone()),
-            kv_row(tr("会话统计").to_string(), trf("{} 张", &[&app.config.stats.count.to_string()])),
-            kv_row(tr("撤销栈深度").to_string(), format!("{} / 3", app.work.history.depth())),
-            kv_row(
-                tr("中间缓存").to_string(),
-                if app.id.fg_preview.is_some() || app.id.prefetch.is_some() {
-                    tr("持有预览副本 / 预取槽（随使用自动回收）")
-                } else {
-                    tr("空闲")
-                },
-            ),
-            container(
-                row![
-                    button(text(tr("释放内存缓存")).size(FS_SM))
-                        .on_press(Message::Settings(SettingsMessage::ClearCache))
-                        .padding(pad(6.0, 12.0, 6.0, 12.0))
-                        .style(btn_secondary),
-                    button(text(tr("清空最近文件")).size(FS_SM))
-                        .on_press(Message::Settings(SettingsMessage::ClearRecent))
-                        .padding(pad(6.0, 12.0, 6.0, 12.0))
-                        .style(btn_secondary),
-                ]
-                .spacing(9),
-            )
-            .padding(pad(6.0, 0.0, 0.0, 0.0)),
+    // 卡① 隐私与运行状态：只读 kv 全收拢，便于一眼排障
+    let status_rows: Vec<Element<'a, Message>> = vec![
+        kv_row(tr("图片上传").to_string(), tr("从不 · 全程本地处理")),
+        kv_row(tr("数据存储").to_string(), tr("仅本机配置目录的 config.json")),
+        kv_row(tr("后端地址").to_string(), engine_txt.clone()),
+        kv_row(tr("会话统计").to_string(), trf("{} 张", &[&app.config.stats.count.to_string()])),
+        kv_row(tr("撤销栈深度").to_string(), format!("{} / 3", app.work.history.depth())),
+        kv_row(
+            tr("中间缓存").to_string(),
+            if app.id.fg_preview.is_some() || app.id.prefetch.is_some() {
+                tr("持有预览副本 / 预取槽（随使用自动回收）")
+            } else {
+                tr("空闲")
+            },
+        ),
+    ];
+
+    // 卡② 数据维护：破坏性操作保持独立按钮与明显分隔，不降为行内小控件
+    let maintain_rows: Vec<Element<'a, Message>> = vec![container(
+        row![
+            button(text(tr("释放内存缓存")).size(FS_SM))
+                .on_press(Message::Settings(SettingsMessage::ClearCache))
+                .padding(pad(6.0, 12.0, 6.0, 12.0))
+                .style(btn_secondary),
+            button(text(tr("清空最近文件")).size(FS_SM))
+                .on_press(Message::Settings(SettingsMessage::ClearRecent))
+                .padding(pad(6.0, 12.0, 6.0, 12.0))
+                .style(btn_secondary),
         ]
         .spacing(9),
     )
-    .into();
-    panel_wrap(tr("隐私与数据").to_string(), c)
+    .into()];
+
+    let col = column![
+        section_card(tr("隐私与运行状态"), None, status_rows),
+        section_card(tr("数据维护"), None, maintain_rows),
+    ]
+    .spacing(10);
+
+    panel_wrap(tr("隐私与数据").to_string(), col.into())
 }
 
 fn changelog_panel<'a>() -> Element<'a, Message> {
@@ -819,7 +836,9 @@ fn changelog_panel<'a>() -> Element<'a, Message> {
         ),
     ];
 
-    let mut col = column![].spacing(12);
+    // 单张大卡片：每个版本是时间线上的一个块（版本行 + 条目列表），
+    // 1px 分隔线只落在版本块之间，条目内部不再有独立卡片。
+    let mut rows: Vec<Element<'a, Message>> = Vec::new();
     for (v, d, tag, items) in entries {
         let mut inner = column![
             row![
@@ -834,9 +853,9 @@ fn changelog_panel<'a>() -> Element<'a, Message> {
         for it in *items {
             inner = inner.push(text(format!("· {it}")).size(FS_SM).color(TXT2()));
         }
-        col = col.push(container(inner).padding(pad_all(CARD_PAD)).style(card));
+        rows.push(container(inner).width(Length::Fill).padding(pad(4.0, 0.0, 4.0, 0.0)).into());
     }
-    panel_wrap(tr("更新日志").to_string(), col.into())
+    panel_wrap(tr("更新日志").to_string(), section_card(tr("更新日志"), None, rows))
 }
 
 
@@ -1073,19 +1092,24 @@ fn appearance_panel<'a>(app: &'a App) -> Element<'a, Message> {
     .spacing(10)
     .align_y(Alignment::Center);
 
-    let c = container(
-        column![
-            kv_row(title_theme, ""),
-            container(mode_pick).padding(pad(4.0, 0.0, 10.0, 0.0)),
-            kv_row(title_accent, ""),
-            container(accent_pick).padding(pad(4.0, 0.0, 10.0, 0.0)),
-            kv_row(title_lang, ""),
-            container(lang_pick).padding(pad(4.0, 0.0, 10.0, 0.0)),
-            dnd_row,
-            times_row,
-        ]
-        .spacing(10),
+    // 卡① 界面外观：标签与下拉编为一组，分隔线只落在组与组之间
+    let look_rows: Vec<Element<'a, Message>> = vec![
+        container(column![kv_row(title_theme, ""), container(mode_pick).padding(pad(4.0, 0.0, 10.0, 0.0))]).into(),
+        container(column![kv_row(title_accent, ""), container(accent_pick).padding(pad(4.0, 0.0, 10.0, 0.0))]).into(),
+        container(column![kv_row(title_lang, ""), container(lang_pick).padding(pad(4.0, 0.0, 10.0, 0.0))]).into(),
+    ];
+
+    // 卡② 通知与免打扰：开关行 + 时段行编为一组
+    let dnd_rows: Vec<Element<'a, Message>> = vec![container(
+        column![dnd_row, times_row].spacing(8),
     )
-    .into();
-    panel_wrap(title_panel, c)
+    .into()];
+
+    let col = column![
+        section_card(tr("界面外观"), None, look_rows),
+        section_card(tr("通知与免打扰"), None, dnd_rows),
+    ]
+    .spacing(10);
+
+    panel_wrap(title_panel, col.into())
 }
