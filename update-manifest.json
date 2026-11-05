@@ -1,18 +1,18 @@
 {
-  "version": "0.4.4",
-  "notes": "壹鸣 WonderLand v0.4.4\n- 新功能：新手引导升级为聚焦式（Spotlight）——遮罩挖洞高亮当前步骤的目标控件，说明气泡锚定在控件旁\n- 新功能：引导支持点击穿透——点遮罩空白处翻到下一步，点洞内目标（如「开始」卡）直接触发该操作，边做边学",
-  "pub_date": "2026-11-04",
+  "version": "0.4.5",
+  "notes": "壹鸣 WonderLand v0.4.5\n- 新手引导改为仅「新手引导」按钮手动开启，默认不自动弹出；移除遮罩与重复描边，仅保留目标控件一圈高亮边框\n- 设置页按卡片类型归组为大卡片（10 个分类中 8 个完成重组），功能入口与关键信息完整保留\n- 吸管光标升级为圆环取色器：环内实时填充悬停色，旁边显示 hex 色值气泡\n- 流畅性优化：大图分级纹理、导出异步化、参数防抖与长任务取消，导入 / 缩放 / 导出不再卡 UI\n- 修复：方图导出越界崩溃、配置索引越界导致批量导出永久锁死、释放缓存与在途推理竞态误报失败\n- 稳定性与安全：抠图 / 证件照世代校验防结果串号、会话锁收口、模型重扫后台化、更新包 SHA-256 强制校验与版本白名单、配置原子写",
+  "pub_date": "2026-11-05",
   "mandatory": false,
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.4/cocole-iced-v0.4.4-setup.exe",
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.5/cocole-iced-v0.4.5-setup.exe",
       "mirror_urls": [
-        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.4/cocole-iced-v0.4.4-setup.exe",
-        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.4/cocole-iced-v0.4.4-setup.exe",
-        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.4/cocole-iced-v0.4.4-setup.exe"
+        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.5/cocole-iced-v0.4.5-setup.exe",
+        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.5/cocole-iced-v0.4.5-setup.exe",
+        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.5/cocole-iced-v0.4.5-setup.exe"
       ],
-      "size": 39732677,
-      "sha256": "266f3609e03288e8b20afe9ca378744cf310d71565f87fc217841710d0d935ae"
+      "size": 39746175,
+      "sha256": "304a1171cb0a7218e8484f972a45d445eb8018056b40af1e9d5f42a705572b76"
     }
   }
 }
