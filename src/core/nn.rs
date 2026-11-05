@@ -943,8 +943,31 @@ fn run_with_fallback(
     }
 }
 
-/// 单次推理执行
+/// 单次推理执行。
+///
+/// 会话缓存可能在 `get_session` 与本函数之间的无锁预处理空窗内被并发释放
+/// （典型：推理在途时点了「释放内存缓存」，或重新扫描触发单模型 `release`）。
+/// 此时按 toast 承诺的「下次推理首张稍慢」就地懒重载会话并重试一次，
+/// 而不是把在途推理直接打成「会话缓存已丢失」。
 fn run_once(
+    info: &NnModelInfo,
+    input: &[f32],
+    size: usize,
+) -> Result<(Vec<f32>, usize, usize), String> {
+    const CACHE_LOST: &str = "会话缓存已丢失";
+    const CACHE_RELEASED: &str = "会话已被释放，请重新执行抠图";
+    match run_once_locked(info, input, size) {
+        Err(e) if e == CACHE_LOST || e == CACHE_RELEASED => {
+            nn_log("会话缓存被并发释放，就地重载会话后重试本次推理");
+            get_session(info)?;
+            run_once_locked(info, input, size)
+        }
+        r => r,
+    }
+}
+
+/// 在会话锁内执行一次推理；缓存缺失时返回哨兵错误（由 [`run_once`] 懒重载重试）。
+fn run_once_locked(
     info: &NnModelInfo,
     input: &[f32],
     size: usize,
@@ -1083,6 +1106,15 @@ mod tests {
         assert!(corner < 128, "白色角落应为背景（实际 {corner}）");
         // 软蒙版特征：不是非黑即白的二值图（边缘存在中间值）
         assert!(mask.iter().any(|&v| v > 8 && v < 247), "应存在软边过渡");
+
+        // 回归：缓存被并发释放（如推理在途时点了「释放内存缓存」）后，
+        // run_once 应就地懒重载成功，而不是报「会话缓存已丢失」。
+        release_all();
+        let input = to_nchw(&rgba, w, h, info.input_size);
+        let (alpha, aw, ah) =
+            run_once(info, &input, info.input_size).expect("释放缓存后 run_once 应懒重载成功");
+        assert_eq!(aw * ah, info.input_size * info.input_size);
+        assert!(!alpha.is_empty());
     }
 
     /// 探针：真实运行 model_fp16.onnx（InSPyReNet，本机插件目录 199MB）。
