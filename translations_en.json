@@ -518,5 +518,10 @@
   "改进": "Improved",
   "修复": "Fixes",
   "更新包下载支持多源镜像回退：GitHub 主源失败自动切换境内可达镜像，下载不再受单源波动影响": "Update downloads now fall back to China-reachable mirrors when the GitHub source fails, no longer affected by a single source",
-  "安装包下载全程 SHA-256 强校验，内容不符自动换源重下，杜绝损坏或被篡改的安装包落地": "Installers are verified with SHA-256 throughout; mismatched content is discarded and re-downloaded from another source"
+  "安装包下载全程 SHA-256 强校验，内容不符自动换源重下，杜绝损坏或被篡改的安装包落地": "Installers are verified with SHA-256 throughout; mismatched content is discarded and re-downloaded from another source",
+  "缩略图加载失败：{}": "Thumbnail failed: {}",
+  "不支持缩略图的文件类型": "Preview not supported for this file type",
+  "无法在编辑窗口打开：{}": "Cannot open in editor: {}",
+  "批量导出相纸排版": "Export print layout in batch",
+  "开启后每张原图各出一页相纸 JPG（含裁剪线、间距与排版）；关闭则按「单张格式」导出单张证件照。": "On: each source photo produces one print-layout JPG (cut lines, gaps and layout included). Off: export single ID photos using the Single format setting."
 }

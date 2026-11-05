@@ -262,6 +262,9 @@ pub struct WorkState {
     pub refresh_seq: u64,
     pub custom_hex: String,
     pub batch: Vec<WorkBatchItem>,
+    /// 最近一次「点击队列项 → 载入编辑窗口」的目标路径。
+    /// 连续点击时只采纳最后一次的回传，避免旧帧把编辑窗口切回上一张。
+    pub batch_load_target: Option<PathBuf>,
     /// 批量处理进行中（防重入；进度经 BatchEvent 回传）
     pub batch_running: bool,
     /// 上次批量输出目录（重试失败项时复用）
@@ -346,6 +349,7 @@ impl Default for WorkState {
             refresh_seq: 0,
             custom_hex: "#FFFFFF".into(),
             batch: Vec::new(),
+            batch_load_target: None,
             batch_running: false,
             batch_out_dir: None,
             last_bg: [255, 255, 255],
@@ -375,20 +379,55 @@ impl QueueStatus {
     }
 }
 
-/// 证件照批量导入队列项
+/// 批量队列项缩略图状态。
+/// iced 0.14 的 `Handle` 未实现 `Debug`，这里手写 `Debug`，让
+/// `WorkBatchItem` 仍能派生 `Debug`（诊断日志可打印整项而不暴露纹理字节）。
+#[derive(Clone, Default)]
+pub enum ThumbState {
+    /// 已入队，后台缩略图任务在途
+    #[default]
+    Loading,
+    /// 已生成，持有可直接上传的纹理句柄
+    Ready(Handle),
+    /// 解码 / 缩放失败，携带原因供行内 tooltip 展示
+    Failed(String),
+    /// 扩展名不在白名单，不发起解码
+    Unsupported,
+}
+
+impl std::fmt::Debug for ThumbState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ThumbState::Loading => f.write_str("Loading"),
+            ThumbState::Ready(_) => f.write_str("Ready"),
+            ThumbState::Failed(e) => f.debug_tuple("Failed").field(e).finish(),
+            ThumbState::Unsupported => f.write_str("Unsupported"),
+        }
+    }
+}
+
+/// 工作台批量队列项（状态徽标 + 失败明细 + 缩略图）
 #[derive(Debug, Clone)]
-/// 工作台批量队列项（与证件照页 IdQueueItem 同构：状态徽标 + 失败明细）
 pub struct WorkBatchItem {
     pub path: PathBuf,
     pub status: QueueStatus,
-    /// 失败原因（仅 Failed 状态）
+    /// 失败原因（仅 Failed 状态，来自批处理）
     pub err: Option<String>,
+    /// 缩略图状态：回传按 path 匹配，不用队列下标，增删项后不会错位
+    pub thumb: ThumbState,
+    /// 点击该项但无法在编辑窗口打开的原因（与批处理失败分开，
+    /// 避免把「没预览成功」误记成「批处理失败」）
+    pub open_err: Option<String>,
 }
 
 pub struct IdQueueItem {
     pub path: std::path::PathBuf,
     pub stem: String,
     pub status: QueueStatus,
+    /// 缩略图状态：回传按 path 匹配，队列项增删后不会串位
+    pub thumb: ThumbState,
+    /// 点击该项但无法在预览舞台打开的原因（与批处理失败分开）
+    pub open_err: Option<String>,
 }
 
 pub struct IdState {
@@ -460,6 +499,11 @@ pub struct IdState {
     pub export_fmt: crate::core::image::ExportFormat,
     /// 批量导出进行中（防重入；进度经 BatchEvent 回传）
     pub batch_exporting: bool,
+    /// 批量导出内容：true = 每张出相纸排版页，false = 单张证件照
+    pub batch_sheet: bool,
+    /// 手动预览目标（点击队列项时设置）。非 None 时 `advance_queue` 不再
+    /// 自动推进下一张，保证编辑窗口稳定停在被点击的那一项。
+    pub queue_preview_path: Option<std::path::PathBuf>,
     /// 旋转校正（度，-15..=15）
     pub rot: i32,
     /// 自定义底色开关 + HEX
@@ -526,6 +570,8 @@ impl Default for IdState {
             decode_inflight: None,
             export_fmt: crate::core::image::ExportFormat::Png,
             batch_exporting: false,
+            batch_sheet: true,
+            queue_preview_path: None,
             rot: 0,
             use_custom_bg: false,
             custom_bg_hex: "#438EDB".to_string(),
@@ -718,6 +764,88 @@ impl App {
                 app.work.compare_at = t.clamp(0.0, 1.0);
             }
         }
+        // COCOLE_DEBUG_BATCH=<dir> 启动时把目录内图片加入批量队列并生成缩略图。
+        // iced 自绘控件无法从外部脚本驱动「添加」文件对话框，截图验证只能靠它
+        // 直达目标状态（与 COCOLE_DEBUG_VIEW / TOOL / COMPARE 同族）。
+        let batch_thumbs = if let Ok(dir) = std::env::var("COCOLE_DEBUG_BATCH") {
+            let mut paths = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if !p.is_file() {
+                        continue;
+                    }
+                    let supported = crate::core::image::supports_thumb(&p);
+                    app.work.batch.push(WorkBatchItem {
+                        path: p.clone(),
+                        status: QueueStatus::Pending,
+                        err: None,
+                        thumb: if supported {
+                            ThumbState::Loading
+                        } else {
+                            ThumbState::Unsupported
+                        },
+                        open_err: None,
+                    });
+                    if supported {
+                        paths.push(p);
+                    }
+                }
+            }
+            Some(crate::ui::page_work::thumb_stream(paths, |path, r| {
+                Message::Work(WorkMessage::ThumbLoaded(path, r))
+            }))
+        } else {
+            None
+        };
+        // COCOLE_DEBUG_IDBATCH=<dir> 启动时切到证件照页、注入批量队列并生成缩略图，
+        // 用于「侧栏队列 / 相纸排版导出」的截图验证（与 COCOLE_DEBUG_BATCH 同族）。
+        let id_batch = if let Ok(dir) = std::env::var("COCOLE_DEBUG_IDBATCH") {
+            let mut thumbs = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if !p.is_file() {
+                        continue;
+                    }
+                    let supported = crate::core::image::supports_thumb(&p);
+                    app.id.queue.push(crate::app::IdQueueItem {
+                        path: p.clone(),
+                        stem: p
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        status: crate::app::QueueStatus::Pending,
+                        thumb: if supported {
+                            crate::app::ThumbState::Loading
+                        } else {
+                            crate::app::ThumbState::Unsupported
+                        },
+                        open_err: None,
+                    });
+                    if supported {
+                        thumbs.push(p);
+                    }
+                }
+            }
+            app.page = Page::IdPhoto;
+            let mut tasks = Vec::new();
+            if !thumbs.is_empty() {
+                tasks.push(crate::ui::page_work::thumb_stream(thumbs, |path, r| {
+                    Message::IdPhoto(IdMessage::ThumbLoaded(path, r))
+                }));
+            }
+            // COCOLE_DEBUG_IDEXPORT=<dir> 再自动跑一次批量导出（跳过文件夹对话框），
+            // 用于核对相纸排版产物的尺寸、瓦片数与文件命名。
+            if let Ok(out) = std::env::var("COCOLE_DEBUG_IDEXPORT") {
+                tasks.push(Task::done(Message::IdPhoto(IdMessage::BatchExportFolder(
+                    Some(PathBuf::from(out)),
+                ))));
+            }
+            Task::batch(tasks)
+        } else {
+            Task::none()
+        };
         // 命令行带图片路径时直接打开（`cocole-iced photo.png`），方便批处理与自动化
         let startup = std::env::args()
             .nth(1)
@@ -749,13 +877,14 @@ impl App {
         // 解析主窗口 Id（自绘标题栏的拖动 / 最小化 / 最大化 / 关闭任务都要用），
         // 并回查一次最大化状态（iced 0.14 无 MAIN 常量，只能经 oldest() 取）
         let win_id = iced::window::oldest().map(Message::WinIdResolved);
-        (
-            app,
-            match startup {
-                Some(t) => Task::batch([welcome, t, auto_check, win_id]),
-                None => Task::batch([welcome, auto_check, win_id]),
-            },
-        )
+        let mut tasks = vec![welcome, auto_check, win_id, id_batch];
+        if let Some(t) = startup {
+            tasks.push(t);
+        }
+        if let Some(t) = batch_thumbs {
+            tasks.push(t);
+        }
+        (app, Task::batch(tasks))
     }
 
     pub fn title(&self) -> String {

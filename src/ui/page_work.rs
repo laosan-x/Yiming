@@ -6,10 +6,11 @@
 use std::path::PathBuf;
 
 use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, stack, text, Space};
+use iced::widget::image::{Handle as ImageHandle, Image as ImageView};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::{Alignment, Element, Length, Size, Task};
 
-use crate::app::{App, Drag, WorkState};
+use crate::app::{App, Drag, ThumbState, WorkState};
 use crate::core::history::Snapshot;
 use crate::core::image::{self as img, ExportFormat, ExportSize, LoadedImage};
 use crate::core::matting::{self, MaskResult, MatteParams, SampleMode};
@@ -95,7 +96,7 @@ where
 
 /// 后台读图（文件对话框与命令行参数共用同一条链路）。
 /// 解码 + 显示金字塔同批在后台完成，UI 线程不再为大图做 resize / 整图拷贝。
-fn load_task(path: PathBuf, viewport: f32) -> Task<Message> {
+fn load_task(path: PathBuf, viewport: f32, batch_target: Option<PathBuf>) -> Task<Message> {
     blocking_task(
         move || {
             let t0 = std::time::Instant::now();
@@ -109,20 +110,79 @@ fn load_task(path: PathBuf, viewport: f32) -> Task<Message> {
                 })
                 .map_err(|e| e.to_string())
         },
-        |r| {
-            Message::Work(WorkMessage::ImageLoaded(match r {
+        move |r| {
+            let loaded = match r {
                 Some(Ok(p)) => Ok(Box::new(p)),
                 Some(Err(e)) => Err(e),
                 None => Err(tr("读取线程异常退出").to_string()),
-            }))
+            };
+            // 队列点击走带 path 的回传，便于丢弃连点时的过期帧；
+            // 普通打开仍走原 ImageLoaded 链路。
+            match batch_target.clone() {
+                Some(p) => Message::Work(WorkMessage::BatchImageLoaded(p, loaded)),
+                None => Message::Work(WorkMessage::ImageLoaded(loaded)),
+            }
         },
     )
+}
+
+/// 缩略图回传按 path 写回队列项；项已被移除 / 清空时返回 false，
+/// 让迟到的后台帧直接丢弃，绝不会按队列下标贴错到别的项上。
+fn apply_thumb(
+    batch: &mut [crate::app::WorkBatchItem],
+    path: &std::path::Path,
+    r: Result<(u32, u32, Vec<u8>), String>,
+) -> bool {
+    let Some(it) = batch.iter_mut().find(|it| it.path.as_path() == path) else {
+        return false;
+    };
+    it.thumb = match r {
+        Ok((w, h, bytes)) => ThumbState::Ready(ImageHandle::from_rgba(w, h, bytes)),
+        Err(e) => ThumbState::Failed(e),
+    };
+    true
+}
+
+/// 选中高亮由编辑窗口当前打开的路径推导，不维护第二份选中状态：
+/// 从任何入口换图、移除队列项后，高亮都会自动与编辑窗口保持一致。
+pub(crate) fn is_batch_selected(
+    src_path: Option<&std::path::Path>,
+    item_path: &std::path::Path,
+) -> bool {
+    src_path == Some(item_path)
+}
+
+/// 批量队列缩略图：串行在后台解码 + 等比缩小，逐张回传。
+/// 串行 + channel 背压避免一次把 N 张大图全部解码造成内存峰值；
+/// 回传携带原 path，队列项被移除 / 清空后到达的结果直接丢弃。
+pub(crate) fn thumb_stream<M>(
+    paths: Vec<PathBuf>,
+    map: impl Fn(PathBuf, Result<(u32, u32, Vec<u8>), String>) -> M + Send + Sync + 'static,
+) -> Task<M>
+where
+    M: Send + 'static,
+{
+    // 工作台与证件照页共用同一套后台解码，只是回传的消息类型不同。
+    Task::stream(iced::stream::channel(4, async move |mut out| {
+        use iced::futures::SinkExt;
+        for path in paths {
+            let p = path.clone();
+            let r = tokio::task::spawn_blocking(move || {
+                img::load_file(&p)
+                    .map(|l| img::thumb_bytes(&l.rgba, img::THUMB_LONG))
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .unwrap_or_else(|_| Err(tr("读取线程异常退出").to_string()));
+            let _ = out.send(map(path, r)).await;
+        }
+    }))
 }
 
 /// 单选图片（首页「开始」卡与工作台「打开图片」共用同一条链路）
 pub(crate) async fn pick_image() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new()
-        .add_filter(tr("图片"), &["png", "jpg", "jpeg", "webp", "bmp"])
+        .add_filter(tr("图片"), img::SUPPORTED_IMAGE_EXTS)
         .pick_file()
         .await
         .map(|h| h.path().to_path_buf())
@@ -130,7 +190,7 @@ pub(crate) async fn pick_image() -> Option<PathBuf> {
 
 async fn pick_images() -> Vec<PathBuf> {
     let picked = rfd::AsyncFileDialog::new()
-        .add_filter(tr("图片"), &["png", "jpg", "jpeg", "webp", "bmp"])
+        .add_filter(tr("图片"), img::SUPPORTED_IMAGE_EXTS)
         .pick_files()
         .await;
     match picked {
@@ -159,34 +219,53 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         WorkMessage::FilePicked(None) => return Task::none(),
         WorkMessage::FilePicked(Some(path)) => {
             app.work.loading = true;
-            return load_task(path, viewport_long(&app.work));
+            return load_task(path, viewport_long(&app.work), None);
         }
         WorkMessage::OpenPath(path) => {
             app.work.loading = true;
-            return load_task(path, viewport_long(&app.work));
+            return load_task(path, viewport_long(&app.work), None);
         }
         WorkMessage::FilesPicked(paths) => {
             // 去重：已在队列里的路径跳过
             let mut added = 0usize;
             let mut dup = 0usize;
+            let mut need_thumbs = Vec::new();
             for p in paths {
                 if app.work.batch.iter().any(|it| it.path == p) {
                     dup += 1;
                     continue;
                 }
+                // 只有白名单内的格式才发起后台解码；其余直接给「不支持预览」占位
+                let thumb = if img::supports_thumb(&p) {
+                    need_thumbs.push(p.clone());
+                    ThumbState::Loading
+                } else {
+                    ThumbState::Unsupported
+                };
                 app.work.batch.push(crate::app::WorkBatchItem {
                     path: p,
                     status: crate::app::QueueStatus::Pending,
                     err: None,
+                    thumb,
+                    open_err: None,
                 });
                 added += 1;
             }
             let dup_note = if dup > 0 { trf("（跳过重复 {} 张）", &[&dup.to_string()]) } else { String::new() };
             app.toast(trf("已加入 {} 张到批量队列{}", &[&added.to_string(), &dup_note]));
-            return Task::none();
+            return if need_thumbs.is_empty() {
+                Task::none()
+            } else {
+                thumb_stream(need_thumbs, |path, r| {
+                    Message::Work(WorkMessage::ThumbLoaded(path, r))
+                })
+            };
         }
         WorkMessage::ImageLoaded(Ok(mut payload)) => {
             app.work.loading = false;
+            // 任何来自「打开图片 / 拖入 / 最近文件」的载入都会让队列点击的
+            // 在途回传失效：用户最新意图优先。
+            app.work.batch_load_target = None;
             // 换图：作废所有在途抠图（推进世代 / 通知取消 / 复位 busy），
             // 否则 A 图的结果会覆盖到 B 图上；ONNX 推理不可中途打断，
             // 但旧帧回传时会被 MaskDone 的世代校验整包丢弃。
@@ -231,8 +310,56 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         }
         WorkMessage::ImageLoaded(Err(e)) => {
             app.work.loading = false;
+            app.work.batch_load_target = None;
             app.toast_err(trf("打开失败：{}", &[&e]));
             return Task::none();
+        }
+
+        /* ── 批量队列：缩略图 + 点击载入编辑窗口 ── */
+        WorkMessage::ThumbLoaded(path, r) => {
+            // 按 path 匹配而非队列下标：项可能已被移除 / 清空，迟到帧直接丢弃
+            apply_thumb(&mut app.work.batch, &path, r);
+            return Task::none();
+        }
+        WorkMessage::BatchSelect(path) => {
+            // 选中态不单独存字段：ImageLoaded(Ok) 会把 src_path 设为该 path，
+            // 视图用 `src_path == it.path` 推导高亮，编辑窗口与高亮天然一致。
+            if !app.work.batch.iter().any(|it| it.path == path) {
+                return Task::none();
+            }
+            let target = path.clone();
+            app.work.batch_load_target = Some(target.clone());
+            app.work.loading = true;
+            return load_task(path, viewport_long(&app.work), Some(target));
+        }
+        WorkMessage::BatchImageLoaded(path, r) => {
+            // 连续点击 A→B：A 的回传到达时 target 已是 B，整帧丢弃，
+            // 编辑窗口最终只显示最后点击的那张。
+            if app.work.batch_load_target.as_deref() != Some(path.as_path()) {
+                return Task::none();
+            }
+            app.work.batch_load_target = None;
+            match r {
+                Ok(payload) => {
+                    for it in &mut app.work.batch {
+                        it.open_err = None;
+                    }
+                    return update(app, WorkMessage::ImageLoaded(Ok(payload)));
+                }
+                Err(e) => {
+                    app.work.loading = false;
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if let Some(it) = app.work.batch.iter_mut().find(|it| it.path == path) {
+                        it.open_err = Some(e.clone());
+                    }
+                    // 不改动 QueueStatus：这是「预览打不开」，不是「批处理失败」
+                    app.toast_err(trf("打开失败：{}", &[&format!("{}（{}）", name, e)]));
+                    return Task::none();
+                }
+            }
         }
 
         /* ── 推理 ── */
@@ -1168,6 +1295,10 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                 return Task::none();
             }
             if i < s.batch.len() {
+                let p = s.batch[i].path.clone();
+                if s.batch_load_target.as_deref() == Some(p.as_path()) {
+                    s.batch_load_target = None;
+                }
                 s.batch.remove(i);
             }
             return Task::none();
@@ -1179,6 +1310,7 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                 return Task::none();
             }
             s.batch.clear();
+            s.batch_load_target = None;
             return Task::none();
         }
         WorkMessage::BatchRetryFailed => {
@@ -2111,6 +2243,15 @@ fn tip_body<'a>(tip: &'a str) -> Element<'a, Message> {
         .into()
 }
 
+/// 与 [`tip_body`] 同外观，但接收自有字符串：队列项的失败原因由 `trf`
+/// 运行时生成，tooltip 必须自己持有 String，不能借用循环内的局部变量。
+pub(crate) fn tip_owned(tip: impl Into<String>) -> Element<'static, Message> {
+    container(text(tip.into()).size(FS_XS).color(iced::Color::WHITE))
+        .padding(pad(6.0, 10.0, 6.0, 10.0))
+        .style(crate::theme::tooltip_ink)
+        .into()
+}
+
 /// 工具条图标按钮：34×34 方块 + 19px 图标 + 悬停提示；激活时底部一条 ink 指示条。
 ///
 /// 对应参考 `.rail-btn` 的三个状态：
@@ -2673,7 +2814,11 @@ fn inspector<'a>(app: &'a App) -> Element<'a, Message> {
         w.batch.len().to_string()
     };
 
-    // 队列项列表：文件名 + 状态（失败可展开明细），超长滚动
+    // 队列项列表：缩略图 + 状态 + 文件名（失败可展开明细），超长滚动。
+    // 整行（除「移除」按钮）是一个按钮：点击把该文件载入编辑窗口。
+    // 选中高亮由 `src_path == it.path` 推导，不另存选中下标 —— 从其它入口
+    // 打开图片或移除队列项时，高亮会自动跟随编辑窗口的真实内容。
+    const THUMB_BOX: f32 = 36.0;
     let mut batch_list = column![].spacing(4);
     for (i, it) in w.batch.iter().enumerate() {
         let name = it
@@ -2694,14 +2839,94 @@ fn inspector<'a>(app: &'a App) -> Element<'a, Message> {
         } else {
             name
         };
-        let mut item = row![
+
+        // 缩略图：加载中 / 不支持给中性占位，解码失败给红色「!」+ 原因；
+        // 三种占位与成品同尺寸，避免列表在加载完成时跳动。
+        let thumb_el: Element<'_, Message> = match &it.thumb {
+            ThumbState::Loading => container(text("·").size(FS_SM).color(TXT3()))
+                .width(Length::Fixed(THUMB_BOX))
+                .height(Length::Fixed(THUMB_BOX))
+                .center_x(Length::Fixed(THUMB_BOX))
+                .center_y(Length::Fixed(THUMB_BOX))
+                .style(crate::theme::icon_tile(PANEL_3(), 4.0))
+                .into(),
+            ThumbState::Ready(h) => container(
+                ImageView::new(h.clone())
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .width(Length::Fixed(THUMB_BOX))
+            .height(Length::Fixed(THUMB_BOX))
+            .into(),
+            ThumbState::Failed(e) => iced::widget::tooltip::Tooltip::new(
+                container(text("!").size(FS_SM).color(DANGER()))
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .center_x(Length::Fixed(THUMB_BOX))
+                    .center_y(Length::Fixed(THUMB_BOX))
+                    .style(crate::theme::icon_tile(DANGER_SOFT(), 4.0)),
+                tip_owned(trf("缩略图加载失败：{}", &[e.as_str()])),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(9.0)
+            .padding(0.0)
+            .style(|_t| container::Style::default())
+            .into(),
+            ThumbState::Unsupported => iced::widget::tooltip::Tooltip::new(
+                container(text("—").size(FS_SM).color(TXT3()))
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .center_x(Length::Fixed(THUMB_BOX))
+                    .center_y(Length::Fixed(THUMB_BOX))
+                    .style(crate::theme::icon_tile(PANEL_3(), 4.0)),
+                tip_owned(tr("不支持缩略图的文件类型")),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(9.0)
+            .padding(0.0)
+            .style(|_t| container::Style::default())
+            .into(),
+        };
+
+        // 「在编辑窗口打不开」与「批处理失败」分开：只加行内「!」+ tooltip，
+        // 不改 QueueStatus，避免把预览失败误记成批处理失败。
+        let mut name_row = row![text(name_txt).size(FS_XS).color(TXT2())]
+            .spacing(5)
+            .align_y(Alignment::Center);
+        if let Some(e) = &it.open_err {
+            let mark: Element<'_, Message> = iced::widget::tooltip::Tooltip::new(
+                text("!").size(FS_XS).color(DANGER()),
+                tip_owned(trf("无法在编辑窗口打开：{}", &[e.as_str()])),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(9.0)
+            .padding(0.0)
+            .style(|_t| container::Style::default())
+            .into();
+            name_row = name_row.push(mark);
+        }
+
+        let selected = is_batch_selected(w.src_path.as_deref(), &it.path);
+        let label = row![
+            thumb_el,
             text(status_txt).size(FS_XS).color(status_color),
-            text(name_txt).size(FS_XS).color(TXT2()),
+            name_row,
             Space::new().width(Length::Fill),
         ]
         .spacing(7)
         .align_y(Alignment::Center);
-        // 移除按钮：非处理中的项才可移除
+        let select_btn = button(label)
+            .width(Length::Fill)
+            .padding(pad(3.0, 6.0, 3.0, 6.0))
+            .on_press(Message::Work(WorkMessage::BatchSelect(it.path.clone())));
+        let select_btn = if selected {
+            select_btn.style(batch_item_selected)
+        } else {
+            select_btn.style(batch_item)
+        };
+        let mut item = row![select_btn].spacing(4).align_y(Alignment::Center);
+        // 移除按钮：非处理中的项才可移除；放在行按钮之外，避免嵌套按钮抢事件
         if !batch_running && it.status != crate::app::QueueStatus::Running {
             item = item.push(
                 button(text("×").size(FS_XS).color(TXT3()))
@@ -2944,5 +3169,65 @@ fn press<'a>(
         b.on_press(msg)
     } else {
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{QueueStatus, WorkBatchItem};
+    use std::path::{Path, PathBuf};
+
+    fn item(p: &str) -> WorkBatchItem {
+        WorkBatchItem {
+            path: PathBuf::from(p),
+            status: QueueStatus::Pending,
+            err: None,
+            thumb: ThumbState::Loading,
+            open_err: None,
+        }
+    }
+
+    #[test]
+    fn thumb_result_matches_by_path_not_index() {
+        let mut batch = vec![item("a.png"), item("b.png")];
+        assert!(apply_thumb(
+            &mut batch,
+            Path::new("b.png"),
+            Ok((2, 2, vec![0u8; 16]))
+        ));
+        assert!(matches!(batch[0].thumb, ThumbState::Loading));
+        assert!(matches!(batch[1].thumb, ThumbState::Ready(_)));
+    }
+
+    #[test]
+    fn late_thumb_after_remove_is_dropped() {
+        let mut batch = vec![item("a.png"), item("b.png")];
+        batch.remove(0);
+        assert!(!apply_thumb(
+            &mut batch,
+            Path::new("a.png"),
+            Ok((2, 2, vec![0u8; 16]))
+        ));
+        assert!(matches!(batch[0].thumb, ThumbState::Loading));
+    }
+
+    #[test]
+    fn failed_thumb_records_reason() {
+        let mut batch = vec![item("a.png")];
+        assert!(apply_thumb(
+            &mut batch,
+            Path::new("a.png"),
+            Err("decode failed".to_string())
+        ));
+        assert!(matches!(&batch[0].thumb, ThumbState::Failed(e) if e == "decode failed"));
+    }
+
+    #[test]
+    fn selection_follows_editor_path() {
+        let p = Path::new("a.png");
+        assert!(is_batch_selected(Some(p), p));
+        assert!(!is_batch_selected(Some(Path::new("other.png")), p));
+        assert!(!is_batch_selected(None, p));
     }
 }

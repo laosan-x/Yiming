@@ -9,7 +9,7 @@ use iced::{Alignment, Color, Element, Length, Task, Theme};
 
 use std::time::Duration;
 
-use crate::app::App;
+use crate::app::{App, ThumbState};
 use crate::core::idphoto::{
     compose_single, erode_mask, make_layout, make_layout_with_cap, parse_hex, sheet_text, ID_BGS,
     ID_PAPERS, ID_SIZES, RenderMode,
@@ -133,29 +133,49 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
                 return Task::none();
             }
             // 参考项目 batch：多选导入 → 队列逐张处理（排队中 → 处理中 → 完成/失败）
+            let mut need_thumbs = Vec::new();
             s.queue = paths
                 .iter()
-                .map(|p| crate::app::IdQueueItem {
-                    path: p.clone(),
-                    stem: p
-                        .file_stem()
-                        .map(|x| x.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "photo".to_string()),
-                    status: crate::app::QueueStatus::Pending,
+                .map(|p| {
+                    let supported = imgcore::supports_thumb(p);
+                    if supported {
+                        need_thumbs.push(p.clone());
+                    }
+                    crate::app::IdQueueItem {
+                        path: p.clone(),
+                        stem: p
+                            .file_stem()
+                            .map(|x| x.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "photo".to_string()),
+                        status: crate::app::QueueStatus::Pending,
+                        thumb: if supported {
+                            ThumbState::Loading
+                        } else {
+                            ThumbState::Unsupported
+                        },
+                        open_err: None,
+                    }
                 })
                 .collect();
             s.queue[0].status = crate::app::QueueStatus::Running;
             s.queue_active = Some(0);
             s.decode_inflight = Some(0);
+            // 批量导入恢复自动逐张处理（点队列项的手动预览模式退出）
+            s.queue_preview_path = None;
             let seq = s.begin_load_chain();
             app.toast(trf("已导入 {} 张照片，开始逐张处理", &[&paths.len().to_string()]));
-            let first = load_id_path(paths[0].clone(), seq);
+            let mut tasks = vec![load_id_path(paths[0].clone(), seq)];
             // 流水线：立即预取解码第 2 张，与第 1 张的抠图并行
             if paths.len() > 1 {
-                let p2 = prefetch_decode(1, paths[1].clone());
-                return Task::batch([first, p2]);
+                tasks.push(prefetch_decode(1, paths[1].clone()));
             }
-            return first;
+            if !need_thumbs.is_empty() {
+                tasks.push(crate::ui::page_work::thumb_stream(
+                    need_thumbs,
+                    |path, r| Message::IdPhoto(IdMessage::ThumbLoaded(path, r)),
+                ));
+            }
+            return Task::batch(tasks);
         }
         IdMessage::FilePicked(Some(path)) => {
             let seq = s.begin_load_chain(); // 先清旧链状态，再置载入中
@@ -187,8 +207,26 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             }
             s.decode_inflight = None;
             s.loading = false;
+            // 手动预览失败：行内标记 + 明确提示，且不推进队列，
+            // 编辑窗口保持上一张，高亮也不会假装选中打不开的项。
+            let preview = s.queue_preview_path.clone();
+            if let Some(p) = preview {
+                if let Some(q) = s.queue.iter_mut().find(|q| q.path == p) {
+                    q.open_err = Some(e.clone());
+                }
+                app.toast_err(trf("打开失败：{}", &[&e]));
+                return Task::none();
+            }
             app.toast_err(trf("打开失败：{}", &[&e]));
             return advance_queue(app, false);
+        }
+        IdMessage::ThumbLoaded(path, r) => {
+            // 按 path 匹配，不用队列下标：项被移除 / 清空后的迟到帧直接丢弃
+            apply_id_thumb(&mut s.queue, &path, r);
+            return Task::none();
+        }
+        IdMessage::ToggleBatchSheet(v) => {
+            s.batch_sheet = v;
         }
         IdMessage::PrefetchLoaded(i, r) => {
             // 只接「下一张待处理项」的预取；与同步解码撞车或槽已占用则丢弃
@@ -211,19 +249,36 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             s.fg_eroded = None;
             s.erode_cache_key = None; // 换照片：预览副本与腐蚀缓存全部作废
             s.busy = false;
+            // 手动预览：本张处理完就停住，不自动推进到下一张，
+            // 保证预览舞台与高亮一直对应被点击的那一项。
+            let previewing = s.queue_preview_path.is_some();
+            if previewing {
+                for q in &mut s.queue {
+                    q.open_err = None;
+                }
+            }
             app.toast(tr("抠图完成，已按规格构图"));
             app.persist();
-            return Task::batch([
-                render(app),
-                advance_queue(app, true),
-                crate::app::schedule_session_sweep(),
-            ]);
+            let mut tasks = vec![render(app)];
+            if !previewing {
+                tasks.push(advance_queue(app, true));
+            }
+            tasks.push(crate::app::schedule_session_sweep());
+            return Task::batch(tasks);
         }
         IdMessage::MatteDone(seq, Err(e)) => {
             if seq != s.load_seq {
                 return Task::none();
             }
             s.busy = false;
+            let preview = s.queue_preview_path.clone();
+            if let Some(p) = preview {
+                if let Some(q) = s.queue.iter_mut().find(|q| q.path == p) {
+                    q.open_err = Some(e.clone());
+                }
+                app.toast_err(trf("抠图失败：{}", &[&e]));
+                return Task::none();
+            }
             app.toast_err(trf("抠图失败：{}", &[&e]));
             return advance_queue(app, false);
         }
@@ -493,6 +548,11 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
                 s.custom_bg_hex.clone(),
                 folder,
                 s.export_fmt,
+                // 排版参数一次性快照：后台线程不回读 App，运行中改相纸/裁剪线
+                // 不会影响本批产物（与单张「导出排版 JPG」同一套几何口径）。
+                s.paper_idx,
+                s.cutline,
+                s.batch_sheet,
             );
         }
         IdMessage::BatchExportFolder(None) => {}
@@ -552,23 +612,25 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
         }
         IdMessage::QueueLoad(i) => {
             if i < s.queue.len() {
-                // 有正在处理的项则先退回排队
-                if let Some(cur) = s.queue_active {
-                    if cur < s.queue.len() && s.queue[cur].status == crate::app::QueueStatus::Running {
-                        s.queue[cur].status = crate::app::QueueStatus::Pending;
-                    }
-                }
-                s.queue[i].status = crate::app::QueueStatus::Running;
-                s.queue_active = Some(i);
-                s.decode_inflight = Some(i);
                 let path = s.queue[i].path.clone();
+                // 手动预览：不改队列状态、不自动推进，编辑窗口稳定停在该项。
+                // 高亮由 `src_path == 该项 path` 推导（start_photo 会写 src_path）。
+                s.queue_active = None;
+                s.decode_inflight = None;
+                s.prefetch = None;
+                s.queue_preview_path = Some(path.clone());
                 let seq = s.begin_load_chain();
+                s.loading = true; // begin_load_chain 会复位 loading，故在其后设置
                 return load_id_path(path, seq);
             }
             return Task::none();
         }
         IdMessage::QueueRemove(i) => {
             if i < s.queue.len() {
+                let removed = s.queue[i].path.clone();
+                if s.queue_preview_path.as_deref() == Some(removed.as_path()) {
+                    s.queue_preview_path = None;
+                }
                 s.queue.remove(i);
                 s.queue_active = s.queue_active.and_then(|a| match a.cmp(&i) {
                     std::cmp::Ordering::Equal => None,
@@ -663,6 +725,23 @@ fn advance_queue(app: &mut App, ok: bool) -> Task<Message> {
 
 fn to_payload(l: imgcore::LoadedImage) -> LoadedPayload {
     LoadedPayload { rgba: l.rgba, path: l.path, stem: l.stem, display: None }
+}
+
+/// 缩略图回传按 path 写回队列项；项已被移除时返回 false，迟到帧直接丢弃。
+/// 用路径而非队列下标，队列增删后绝不会把 A 的缩略图贴到 B 上。
+fn apply_id_thumb(
+    queue: &mut [crate::app::IdQueueItem],
+    path: &std::path::Path,
+    r: Result<(u32, u32, Vec<u8>), String>,
+) -> bool {
+    let Some(it) = queue.iter_mut().find(|it| it.path.as_path() == path) else {
+        return false;
+    };
+    it.thumb = match r {
+        Ok((w, h, bytes)) => ThumbState::Ready(Handle::from_rgba(w, h, bytes)),
+        Err(e) => ThumbState::Failed(e),
+    };
+    true
 }
 
 /// 后台预取解码：批量流水线的解码级（结果进单槽，解码 N+1 ∥ 抠图 N）
@@ -1159,6 +1238,9 @@ fn batch_export_task(
     custom_bg_hex: String,
     folder: std::path::PathBuf,
     fmt: ExportFormat,
+    paper_idx: usize,
+    cutline: bool,
+    batch_sheet: bool,
 ) -> Task<Message> {
     // 底色解析（与预览 resolve_bg 同语义，线程内自足）
     let bg_color = if use_custom_bg {
@@ -1193,6 +1275,9 @@ fn batch_export_task(
                         off_y,
                         dpi,
                         rot,
+                        paper_idx,
+                        cutline,
+                        batch_sheet,
                     )
                 }));
                 match r {
@@ -1235,6 +1320,16 @@ fn batch_export_task(
     }))
 }
 
+/// 批量导出产物名：排版模式固定 JPG（与「导出排版 JPG」同口径），
+/// 单张模式沿用「单张格式」。抽成纯函数便于回归命名一致性。
+fn batch_output_name(stem: &str, fmt: ExportFormat, sheet: bool) -> String {
+    if sheet {
+        format!("{stem}_idphoto-sheet.jpg")
+    } else {
+        format!("{stem}_idphoto.{}", fmt.ext())
+    }
+}
+
 /// 单张批量项：读图 → 抠图（NN 或色键回退）→ 边缘收缩 → 旋转校正 → 构图合成 → 编码 → 写盘
 #[allow(clippy::too_many_arguments)]
 fn run_batch_one(
@@ -1251,6 +1346,9 @@ fn run_batch_one(
     off_y: i32,
     dpi: u32,
     rot: i32,
+    paper_idx: usize,
+    cutline: bool,
+    batch_sheet: bool,
 ) -> Result<String, String> {
     let loaded = imgcore::load_file(path).map_err(|e| e.to_string())?;
     let (w, h) = (loaded.rgba.width() as usize, loaded.rgba.height() as usize);
@@ -1295,8 +1393,28 @@ fn run_batch_one(
         off_y,
         dpi,
     );
-    let bytes = imgcore::save_to_memory(&img, fmt, None).map_err(|e| e.to_string())?;
-    let out = folder.join(format!("{}_idphoto.{}", loaded.stem, fmt.ext()));
+    // 批量排版：与单张「导出排版 JPG」共用 make_layout 的几何口径 ——
+    // 相纸横竖择优、列×行/90° 铺排、间距、裁剪线、白底画布全部保留。
+    // 一张原图 = 一页相纸（同一人的证件照重复铺满），与单张排版导出同义。
+    let (bytes, name) = if batch_sheet {
+        let (mw, mh) = ID_SIZES[spec_idx].mm();
+        let paper = ID_PAPERS[paper_idx.min(ID_PAPERS.len() - 1)];
+        let (canvas, plan) = make_layout(&img, &paper, dpi, mw, mh, cutline);
+        if plan.count == 0 {
+            return Err(sheet_text(&paper, &plan));
+        }
+        (
+            imgcore::save_to_memory(&canvas, ExportFormat::Jpg, Some([255, 255, 255]))
+                .map_err(|e| e.to_string())?,
+            batch_output_name(&loaded.stem, fmt, true),
+        )
+    } else {
+        (
+            imgcore::save_to_memory(&img, fmt, None).map_err(|e| e.to_string())?,
+            batch_output_name(&loaded.stem, fmt, false),
+        )
+    };
+    let out = folder.join(name);
     std::fs::write(&out, &bytes).map_err(|e| trf("写入失败：{}", &[&e.to_string()]))?;
     Ok(out.to_string_lossy().to_string())
 }
@@ -1313,7 +1431,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .spacing(6);
 
-    let body: Element<Message> = if !has {
+    // 队列非空时，即使首图尚在处理 / 处理失败也显示左右布局：侧栏里的
+    // 批量队列必须始终可见（预览区此时显示「暂无预览」），不必等成品出图。
+    let body: Element<Message> = if !has && s.queue.is_empty() {
         // 空状态（对应 .idp-empty / .dropzone.idp-drop）：虚线拖放区 +
         // 选择照片 / 拍摄双入口。拍摄依赖摄像头采集，原生版暂缺（置灰 + 说明）。
         //
@@ -1387,15 +1507,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         row![preview(app), side(app)].spacing(18).into()
     };
 
-    let mut page_col = column![
+    // 批量队列已移入右侧侧栏的 scrollable 里，不再作为 page_col 的第三个
+    // 兄弟节点 —— 队列再多也不会挤占左侧预览舞台的高度。
+    let page_col = column![
         container(head).padding(pad(22.0, 24.0, 12.0, 24.0)),
         container(body).padding(pad(0.0, 24.0, 24.0, 24.0)),
     ]
     .spacing(10);
-    // 批量队列面板（参考项目 batch 面板：状态徽标 + 载入 / 移除）
-    if !s.queue.is_empty() {
-        page_col = page_col.push(queue_panel(app));
-    }
 
     let base = container(page_col)
         .width(Length::Fill)
@@ -1421,37 +1539,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 
-/// 批量队列面板（参考项目 batch 项：文件名 + 状态徽标 + 载入 / 移除）
+/// 批量队列（侧栏 section）：缩略图 + 状态徽标 + 点击载入预览舞台 + 移除。
+/// 整行按钮与「移除」按钮分离，避免嵌套按钮抢事件；高亮由 `src_path` 推导。
 fn queue_panel<'a>(app: &'a App) -> Element<'a, Message> {
     use crate::app::QueueStatus;
     let s = &app.id;
-    let mut col = column![
-        row![
-            icon("layers", 15.0, TXT2()),
-            text(tr("批量队列")).size(FS_H).color(TXT()).font(bold_font()),
-            text(trf("{} 项", &[&s.queue.len().to_string()])).size(FS_SM).color(TXT3()),
-            Space::new().width(Length::Fill),
-            // 批量导出入口：一键把整个队列按当前规格/底色/格式导出到所选文件夹
-            if s.batch_exporting {
-                let badge: Element<'_, Message> = container(
-                    text(tr("批量导出中…")).size(FS_XS).color(TXT3()),
-                )
-                .padding(pad(4.0, 9.0, 4.0, 9.0))
-                .into();
-                badge
-            } else {
-                button(text(tr("批量导出")).size(FS_XS).color(Color::WHITE))
-                    .on_press(Message::IdPhoto(IdMessage::BatchExport))
-                    .padding(pad(4.0, 9.0, 4.0, 9.0))
-                    .style(btn_primary)
-                    .into()
-            },
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    ]
-    .spacing(8);
+    const THUMB_BOX: f32 = 36.0;
 
+    let mut list = column![].spacing(4);
     for (i, q) in s.queue.iter().enumerate() {
         let (fg, bg) = match q.status {
             QueueStatus::Pending => (TXT3(), PANEL_3()),
@@ -1459,33 +1554,160 @@ fn queue_panel<'a>(app: &'a App) -> Element<'a, Message> {
             QueueStatus::Done => (OK(), OK_SOFT()),
             QueueStatus::Failed => (DANGER(), DANGER_SOFT()),
         };
-        col = col.push(
-            container(
-                row![
-                    text(&q.stem).size(FS).color(TXT()),
-                    Space::new().width(Length::Fill),
-                    container(text(q.status.label()).size(FS_XS).color(fg))
-                        .padding(pad(3.0, 8.0, 3.0, 8.0))
-                        .style(badge_style(fg, bg)),
-                    button(text(tr("载入")).size(FS_XS))
-                        .on_press(Message::IdPhoto(IdMessage::QueueLoad(i)))
-                        .padding(pad(4.0, 9.0, 4.0, 9.0))
-                        .style(btn_secondary),
-                    button(text(tr("移除")).size(FS_XS))
-                        .on_press(Message::IdPhoto(IdMessage::QueueRemove(i)))
-                        .padding(pad(4.0, 9.0, 4.0, 9.0))
-                        .style(btn_secondary),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
+        // 与工作台队列同款：加载中 / 不支持给中性占位，解码失败给红色「!」+ 原因。
+        // 三种占位与成品同尺寸，避免加载完成时列表跳动。
+        let thumb_el: Element<'_, Message> = match &q.thumb {
+            ThumbState::Loading => container(text("·").size(FS_SM).color(TXT3()))
+                .width(Length::Fixed(THUMB_BOX))
+                .height(Length::Fixed(THUMB_BOX))
+                .center_x(Length::Fixed(THUMB_BOX))
+                .center_y(Length::Fixed(THUMB_BOX))
+                .style(crate::theme::icon_tile(PANEL_3(), 4.0))
+                .into(),
+            ThumbState::Ready(h) => container(
+                img_widget::Image::new(h.clone())
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .content_fit(iced::ContentFit::Contain),
             )
-            .padding(pad(SP_3, CARD_PAD, SP_3, CARD_PAD))
+            .width(Length::Fixed(THUMB_BOX))
+            .height(Length::Fixed(THUMB_BOX))
+            .into(),
+            ThumbState::Failed(e) => iced::widget::tooltip::Tooltip::new(
+                container(text("!").size(FS_SM).color(DANGER()))
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .center_x(Length::Fixed(THUMB_BOX))
+                    .center_y(Length::Fixed(THUMB_BOX))
+                    .style(crate::theme::icon_tile(DANGER_SOFT(), 4.0)),
+                crate::ui::page_work::tip_owned(trf("缩略图加载失败：{}", &[e.as_str()])),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(9.0)
+            .padding(0.0)
+            .style(|_t| container::Style::default())
+            .into(),
+            ThumbState::Unsupported => iced::widget::tooltip::Tooltip::new(
+                container(text("—").size(FS_SM).color(TXT3()))
+                    .width(Length::Fixed(THUMB_BOX))
+                    .height(Length::Fixed(THUMB_BOX))
+                    .center_x(Length::Fixed(THUMB_BOX))
+                    .center_y(Length::Fixed(THUMB_BOX))
+                    .style(crate::theme::icon_tile(PANEL_3(), 4.0)),
+                crate::ui::page_work::tip_owned(tr("不支持缩略图的文件类型")),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(9.0)
+            .padding(0.0)
+            .style(|_t| container::Style::default())
+            .into(),
+        };
+
+        // 「预览舞台打不开」与「批处理失败」分开，只给行内「!」+ tooltip
+        let mut name_row = row![text(&q.stem).size(FS_XS).color(TXT2())]
+            .spacing(5)
+            .align_y(Alignment::Center);
+        if let Some(e) = &q.open_err {
+            name_row = name_row.push(
+                iced::widget::tooltip::Tooltip::new(
+                    text("!").size(FS_XS).color(DANGER()),
+                    crate::ui::page_work::tip_owned(trf("无法在编辑窗口打开：{}", &[e.as_str()])),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .gap(9.0)
+                .padding(0.0)
+                .style(|_t| container::Style::default()),
+            );
+        }
+
+        let selected = crate::ui::page_work::is_batch_selected(s.src_path.as_deref(), &q.path);
+        let label = row![
+            thumb_el,
+            container(text(q.status.label()).size(FS_XS).color(fg))
+                .padding(pad(3.0, 8.0, 3.0, 8.0))
+                .style(badge_style(fg, bg)),
+            name_row,
+            Space::new().width(Length::Fill),
+        ]
+        .spacing(7)
+        .align_y(Alignment::Center);
+        let select_btn = button(label)
             .width(Length::Fill)
-            .style(panel),
+            .padding(pad(3.0, 6.0, 3.0, 6.0))
+            .on_press(Message::IdPhoto(IdMessage::QueueLoad(i)));
+        let select_btn = if selected {
+            select_btn.style(batch_item_selected)
+        } else {
+            select_btn.style(batch_item)
+        };
+        let mut item = row![select_btn].spacing(4).align_y(Alignment::Center);
+        item = item.push(
+            button(text("×").size(FS_XS).color(TXT3()))
+                .padding(pad(1.0, 5.0, 1.0, 5.0))
+                .style(btn_secondary)
+                .on_press(Message::IdPhoto(IdMessage::QueueRemove(i))),
         );
+        list = list.push(item);
     }
 
-    container(col).padding(pad(0.0, 24.0, 0.0, 24.0)).width(Length::Fill).into()
+    let list_el: Element<'_, Message> = if s.queue.is_empty() {
+        hint(tr("暂无任务，点击「添加」选择多张图"))
+    } else if s.queue.len() > 6 {
+        container(scrollable(list).direction(Direction::Vertical(
+            Scrollbar::new().width(3).scroller_width(3),
+        )))
+        .height(Length::Fixed(190.0))
+        .width(Length::Fill)
+        .into()
+    } else {
+        list.into()
+    };
+
+    let export_btn: Element<'_, Message> = if s.batch_exporting {
+        container(text(tr("批量导出中…")).size(FS_XS).color(TXT3()))
+            .padding(pad(4.0, 9.0, 4.0, 9.0))
+            .into()
+    } else {
+        button(text(tr("批量导出")).size(FS_SM).color(Color::WHITE))
+            .on_press(Message::IdPhoto(IdMessage::BatchExport))
+            .padding(pad(7.0, 12.0, 7.0, 12.0))
+            .width(Length::Fill)
+            .style(btn_primary)
+            .into()
+    };
+
+    section(
+        tr("批量队列"),
+        Some(badge(
+            s.queue.len().to_string(),
+            if s.batch_exporting { BadgeKind::Ink } else { BadgeKind::Dim },
+        )),
+        column![
+            list_el,
+            switch_row(
+                tr("批量导出相纸排版"),
+                s.batch_sheet,
+                Message::IdPhoto(IdMessage::ToggleBatchSheet(!s.batch_sheet)),
+                None,
+            ),
+            hint(tr("开启后每张原图各出一页相纸 JPG（含裁剪线、间距与排版）；关闭则按「单张格式」导出单张证件照。")),
+            row![
+                button(text(tr("添加")).size(FS_SM))
+                    .width(Length::Fill)
+                    .padding(pad(6.0, 8.0, 6.0, 8.0))
+                    .style(btn_secondary)
+                    .on_press(Message::IdPhoto(IdMessage::OpenBatch)),
+                button(text(tr("队列状态")).size(FS_SM))
+                    .width(Length::Fill)
+                    .padding(pad(6.0, 8.0, 6.0, 8.0))
+                    .style(btn_secondary)
+                    .on_press(Message::IdPhoto(IdMessage::BatchProc)),
+            ]
+            .spacing(8),
+            export_btn,
+        ]
+        .spacing(8),
+    )
 }
 
 /// 工具栏黑底小按钮（`.btn.btn-sm`：12px 白字 + 14px 白图标，高 30）
@@ -1958,9 +2180,17 @@ fn side<'a>(app: &'a App) -> Element<'a, Message> {
 
     container(
         scrollable(
-            column![spec_sec, matte_sec, compose_sec, preview_sec, sheet_sec, actions]
-                .spacing(10)
-                .padding(pad(2.0, 2.0, 20.0, 2.0)),
+            column![
+                spec_sec,
+                matte_sec,
+                compose_sec,
+                preview_sec,
+                sheet_sec,
+                actions,
+                queue_panel(app),
+            ]
+            .spacing(10)
+            .padding(pad(2.0, 2.0, 20.0, 2.0)),
         )
         .direction(Direction::Vertical(Scrollbar::new().width(3).scroller_width(3)))
         .style(scrollbar_style),
@@ -1994,4 +2224,77 @@ fn index_of_bg(c: &str) -> usize {
 }
 fn index_of_paper(p: &crate::core::idphoto::IdPaper) -> usize {
     ID_PAPERS.iter().position(|x| x.k == p.k).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{IdQueueItem, QueueStatus};
+    use std::path::{Path, PathBuf};
+
+    fn item(p: &str) -> IdQueueItem {
+        IdQueueItem {
+            path: PathBuf::from(p),
+            stem: p.to_string(),
+            status: QueueStatus::Pending,
+            thumb: ThumbState::Loading,
+            open_err: None,
+        }
+    }
+
+    #[test]
+    fn thumb_matches_by_path_not_index() {
+        let mut q = vec![item("a.png"), item("b.png")];
+        assert!(apply_id_thumb(
+            &mut q,
+            Path::new("b.png"),
+            Ok((2, 2, vec![0u8; 16]))
+        ));
+        assert!(matches!(q[0].thumb, ThumbState::Loading));
+        assert!(matches!(q[1].thumb, ThumbState::Ready(_)));
+    }
+
+    #[test]
+    fn late_thumb_after_remove_is_dropped() {
+        let mut q = vec![item("a.png"), item("b.png")];
+        q.remove(0);
+        assert!(!apply_id_thumb(
+            &mut q,
+            Path::new("a.png"),
+            Ok((2, 2, vec![0u8; 16]))
+        ));
+        assert!(matches!(q[0].thumb, ThumbState::Loading));
+    }
+
+    #[test]
+    fn failed_thumb_records_reason() {
+        let mut q = vec![item("a.png")];
+        assert!(apply_id_thumb(
+            &mut q,
+            Path::new("a.png"),
+            Err("bad png".to_string())
+        ));
+        assert!(matches!(&q[0].thumb, ThumbState::Failed(e) if e == "bad png"));
+    }
+
+    #[test]
+    fn batch_output_name_switches_between_sheet_and_single() {
+        assert_eq!(
+            batch_output_name("a", ExportFormat::Png, true),
+            "a_idphoto-sheet.jpg"
+        );
+        assert_eq!(
+            batch_output_name("a", ExportFormat::Png, false),
+            "a_idphoto.png"
+        );
+        assert_eq!(
+            batch_output_name("a", ExportFormat::Webp, false),
+            "a_idphoto.webp"
+        );
+        // 排版模式固定 JPG，不受「单张格式」影响
+        assert_eq!(
+            batch_output_name("a", ExportFormat::Webp, true),
+            "a_idphoto-sheet.jpg"
+        );
+    }
 }

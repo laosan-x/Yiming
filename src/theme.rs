@@ -723,6 +723,38 @@ pub fn btn_secondary(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// 批量队列项按钮：普通态透明底，避免与外层面板叠成双层卡片
+pub fn batch_item(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Active | button::Status::Disabled => Color::TRANSPARENT,
+        button::Status::Hovered => HOVER(),
+        button::Status::Pressed => ACTIVE(),
+    };
+    button::Style {
+        background: Some(Background::Color(bg)),
+        text_color: TXT(),
+        border: border(Color::TRANSPARENT, 0.0, R_SM),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+/// 批量队列项按钮：当前正在编辑窗口打开的项（--acc 软底 + 焦点环描边）
+pub fn batch_item_selected(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Active | button::Status::Disabled => ACC_SOFT(),
+        button::Status::Hovered => ACC_FAINT(),
+        button::Status::Pressed => ACC_ACTIVE(),
+    };
+    button::Style {
+        background: Some(Background::Color(bg)),
+        text_color: TXT(),
+        border: border(ACC_RING(), 1.0, R_SM),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
 /// 首页「开始」卡里的浅色次级按钮（`.home-start-actions .btn`）：
 /// 比常规次级更淡（`--panel-2` 底），在同一张卡里与拖放区区分层级
 pub fn btn_ghost(_theme: &Theme, status: button::Status) -> button::Style {

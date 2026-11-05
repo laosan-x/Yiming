@@ -632,6 +632,15 @@ const EN: &[(&str, &str)] = &[
     ("壹鸣的所有功能完全免费、没有广告，图片处理全程留在你的电脑上，不上传任何数据。如果它帮到了你，欢迎支持持续开发——让每一个新功能都稳定到来。", "Everything in WonderLand is free, ad-free, and stays on your machine — no uploads, ever. If it helps you, consider supporting ongoing development so every new feature ships reliably."),
     ("0 元的 Star 也是很好的支持。", "A free Star is a great way to support us, too."),
     ("去点 Star", "Give a Star"),
+
+    // 批量队列缩略图 / 点击载入编辑窗口
+    ("缩略图加载失败：{}", "Thumbnail failed: {}"),
+    ("不支持缩略图的文件类型", "Preview not supported for this file type"),
+    ("无法在编辑窗口打开：{}", "Cannot open in editor: {}"),
+
+    // 证件照批量队列：侧栏 + 相纸排版导出
+    ("批量导出相纸排版", "Export print layout in batch"),
+    ("开启后每张原图各出一页相纸 JPG（含裁剪线、间距与排版）；关闭则按「单张格式」导出单张证件照。", "On: each source photo produces one print-layout JPG (cut lines, gaps and layout included). Off: export single ID photos using the Single format setting."),
 ];
 
 fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {

@@ -26,6 +26,38 @@ pub struct LoadedImage {
     pub stem: String,
 }
 
+/// 批量队列缩略图与文件选择对话框共用的扩展名白名单（小写、不含点）。
+/// 与本项目 `image` crate 实际启用的解码格式保持一致；表外文件仍可进队列，
+/// 但只显示「不支持预览」占位，不发起后台解码。
+pub const SUPPORTED_IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp"];
+
+/// 缩略图长边上限（逻辑像素）：UI 显示约 40px，留 2x DPI 余量。
+pub const THUMB_LONG: u32 = 96;
+
+/// 该文件是否支持生成缩略图（按扩展名，大小写不敏感）
+pub fn supports_thumb(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| SUPPORTED_IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// 等比生成缩略图 RGBA 字节；长边不超过 `long`，小图原样返回。
+/// 后台线程调用，只回传纯字节；UI 线程仅做 `Handle::from_rgba` 包装（O(1)）。
+pub fn thumb_bytes(img: &RgbaImage, long: u32) -> (u32, u32, Vec<u8>) {
+    let (w, h) = (img.width(), img.height());
+    let cap = long.max(1);
+    let src_long = w.max(h).max(1);
+    if src_long <= cap {
+        return (w, h, img.as_raw().clone());
+    }
+    let sc = cap as f32 / src_long as f32;
+    let tw = ((w as f32 * sc).round() as u32).max(1);
+    let th = ((h as f32 * sc).round() as u32).max(1);
+    let small = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
+    (tw, th, small.into_raw())
+}
+
 /// 从磁盘解码一张图
 pub fn load_file(path: &Path) -> Result<LoadedImage> {
     // EXIF 方向：手机竖拍照片靠 EXIF 标记旋转，decode() 不会自动应用 ——
@@ -424,6 +456,38 @@ mod tests {
 
     fn solid(w: u32, h: u32, rgba: [u8; 4]) -> RgbaImage {
         RgbaImage::from_fn(w, h, |_, _| image::Rgba(rgba))
+    }
+
+    #[test]
+    fn thumb_bytes_keeps_aspect_and_caps_long_side() {
+        let src = solid(400, 200, [1, 2, 3, 255]);
+        let (w, h, bytes) = thumb_bytes(&src, THUMB_LONG);
+        assert_eq!((w, h), (96, 48));
+        assert_eq!(bytes.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn thumb_bytes_small_image_is_untouched() {
+        let src = solid(30, 20, [9, 8, 7, 255]);
+        let (w, h, bytes) = thumb_bytes(&src, THUMB_LONG);
+        assert_eq!((w, h), (30, 20));
+        assert_eq!(bytes, *src.as_raw());
+    }
+
+    #[test]
+    fn thumb_bytes_never_produces_zero_side() {
+        let src = solid(1000, 1, [1, 1, 1, 255]);
+        let (w, h, _) = thumb_bytes(&src, THUMB_LONG);
+        assert_eq!((w, h), (96, 1));
+    }
+
+    #[test]
+    fn supports_thumb_matches_whitelist_case_insensitively() {
+        assert!(supports_thumb(std::path::Path::new("a.PNG")));
+        assert!(supports_thumb(std::path::Path::new("a.JpEg")));
+        assert!(supports_thumb(std::path::Path::new("a.webp")));
+        assert!(!supports_thumb(std::path::Path::new("a.txt")));
+        assert!(!supports_thumb(std::path::Path::new("noext")));
     }
 
     /// 精确缩放的输出必须严格等于请求尺寸（DynamicImage::resize 会等比收缩）

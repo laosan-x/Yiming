@@ -336,6 +336,12 @@ pub enum WorkMessage {
     StageLeave,
     /// 批量
     BatchAdd,
+    /// 点击队列项：把该文件载入编辑窗口（选中高亮由 src_path 推导）
+    BatchSelect(PathBuf),
+    /// 点击队列项的载入回传；带目标 path，连续点击时只采纳最后一帧
+    BatchImageLoaded(PathBuf, Result<Box<LoadedPayload>, String>),
+    /// 缩略图生成回传；按 path 匹配队列项，项已移除则丢弃
+    ThumbLoaded(PathBuf, Result<(u32, u32, Vec<u8>), String>),
     /// 选输出目录后开始批量处理
     BatchRun,
     BatchFolderPicked(Option<PathBuf>),
@@ -447,8 +453,12 @@ pub enum IdMessage {
     ExportSheet,
     Saved(Result<String, String>),
     ChangePhoto,
-    /// 载入批量队列中的某一项（参考项目 batch 面板「载入」按钮）
+    /// 载入批量队列中的某一项到预览舞台（手动预览，不自动推进队列）
     QueueLoad(usize),
+    /// 缩略图生成回传；按 path 匹配队列项，项已移除则丢弃
+    ThumbLoaded(PathBuf, Result<(u32, u32, Vec<u8>), String>),
+    /// 批量导出内容：相纸排版 / 单张证件照
+    ToggleBatchSheet(bool),
     /// 从批量队列移除某一项（参考项目「移除」按钮）
     QueueRemove(usize),
     /// 批处理按钮（参考项目 btnIdBatchProc：无队列提示先导入，有队列报数量）
