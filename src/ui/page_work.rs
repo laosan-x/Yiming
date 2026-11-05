@@ -441,8 +441,20 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         }
         WorkMessage::RescanModels => {
             crate::core::nn::release_all(); // 目录内容可能已变化，全部会话作废
-            let plugin_dir = app.config.plugin_dir.as_deref();
-            let (dir, models) = crate::core::nn::scan(plugin_dir);
+            let plugin_dir = app.config.plugin_dir.clone();
+            // 扫描会为每个 .onnx 调用 commit_from_file（完整加载权重读输入
+            // 尺寸），目录里有 490MB 第三方模型时可达 10s+；放到阻塞线程池，
+            // UI 线程只负责发任务与收结果，不再冻结。
+            return blocking_task(
+                move || crate::core::nn::scan(plugin_dir.as_deref()),
+                |r| Message::Work(WorkMessage::ModelsScanned(r)),
+            );
+        }
+        WorkMessage::ModelsScanned(payload) => {
+            let Some((dir, models)) = payload else {
+                app.toast_err(tr("模型扫描线程异常退出"));
+                return Task::none();
+            };
             app.work.models_dir = dir;
             app.work.nn_models = models;
             // 当前选中的神经网络模型若已不在清单里，回退本地智能抠图

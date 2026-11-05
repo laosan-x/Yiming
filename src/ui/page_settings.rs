@@ -103,11 +103,9 @@ pub fn update(app: &mut App, msg: SettingsMessage) -> Task<Message> {
             app.toast(tr("最近文件已清空"));
         }
         SettingsMessage::RescanModels => {
-            let plugin_dir = app.config.plugin_dir.as_deref();
-            let (dir, models) = crate::core::nn::scan(plugin_dir);
-            app.work.models_dir = dir;
-            app.work.nn_models = models;
-            app.toast(trf("模型扫描完成：发现 {} 个模型", &[&app.work.nn_models.len().to_string()]));
+            // 与工作台共用同一条后台扫描链路（含会话释放、失效模型回退），
+            // 不在 UI 线程完整加载 490MB 权重，避免点一下按钮界面冻结十几秒。
+            return Task::done(Message::Work(crate::message::WorkMessage::RescanModels));
         }
         SettingsMessage::RefreshDpi => {}
     }

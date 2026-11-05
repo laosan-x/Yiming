@@ -244,6 +244,20 @@ fn config_path() -> Option<std::path::PathBuf> {
     Some(dir.join("config.json"))
 }
 
+/// 原子写：先写同目录 `.json.tmp`，再 rename 覆盖目标。
+/// 同目录保证 rename 不跨卷；失败时清掉临时文件，目标保持原样。
+fn atomic_write(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 impl Config {
     /// 读取配置；任何失败都回落到默认值（不因配置损坏而启动失败）。
     /// 读出的数值统一经 [`Config::sanitize`] 收敛，避免外部 JSON 越界。
@@ -257,13 +271,30 @@ impl Config {
         let Some(path) = config_path() else {
             return Self::default();
         };
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        serde_json::from_str::<Self>(&text).unwrap_or_else(|e| {
-            eprintln!("[config] 解析失败，回落默认配置：{e}");
-            Self::default()
-        })
+        Self::from_json_or_default(&text, &path)
+    }
+
+    /// 解析失败时回落默认配置，但**先把损坏文件改名保留**。
+    /// 否则下次任意 `save()` 会把用户原有 recent / 偏好永久覆盖，
+    /// 且没有副本可恢复（半写入的 JSON 曾导致这种静默数据丢失）。
+    fn from_json_or_default(text: &str, path: &std::path::Path) -> Self {
+        match serde_json::from_str::<Self>(text) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[config] 解析失败，回落默认配置：{e}");
+                let backup = path.with_extension("json.bad");
+                match std::fs::rename(path, &backup) {
+                    Ok(()) => eprintln!("[config] 已保留损坏文件：{}", backup.display()),
+                    Err(re) => {
+                        eprintln!("[config] 损坏文件保留失败（{}）：{re}", backup.display())
+                    }
+                }
+                Self::default()
+            }
+        }
     }
 
     /// 把外部 JSON 的数值字段收敛到代码允许的范围。
@@ -296,7 +327,9 @@ impl Config {
         let Some(path) = config_path() else { return };
         match serde_json::to_string_pretty(self) {
             Ok(text) => {
-                if let Err(e) = std::fs::write(path, text) {
+                // 同目录 tmp + rename：掉电或写入中断只会留下 .tmp，
+                // 不会留下半截 config.json 让下次启动静默丢配置。
+                if let Err(e) = atomic_write(&path, &text) {
                     eprintln!("[config] 写入失败（配置不持久，应用继续运行）：{e}");
                 }
             }
@@ -356,6 +389,37 @@ mod tests {
             (c.id.spec_idx, c.id.bg_idx, c.id.dpi, c.export_size),
             (3, 2, 600, 800)
         );
+    }
+
+    /// 回归：原子写必须覆盖已有文件，且不残留 .tmp
+    #[test]
+    fn atomic_write_replaces_existing_file() {
+        let dir = std::env::temp_dir().join(format!("cocole-cfg-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("临时目录应可创建");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "half-written").unwrap();
+        atomic_write(&path, "{\"ok\":true}").expect("原子写应成功");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"ok\":true}");
+        assert!(!path.with_extension("json.tmp").exists(), "不得残留 tmp");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：解析失败不能静默丢用户数据，原文件要改名保留
+    #[test]
+    fn broken_config_is_quarantined() {
+        let dir =
+            std::env::temp_dir().join(format!("cocole-cfg-quarantine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("临时目录应可创建");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let cfg = Config::from_json_or_default("{ not json", &path);
+        assert_eq!(cfg.id.spec_idx, 0, "应回落默认配置");
+        let backup = path.with_extension("json.bad");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{ not json");
+        assert!(!path.exists(), "损坏文件应被移走");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 序列化往返后仍能收敛（模拟手工编辑过的 config.json）

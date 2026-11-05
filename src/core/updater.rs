@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use iced::Task;
 
-use crate::core::i18n::trf;
+use crate::core::i18n::{tr, trf};
 use crate::message::{Message, UpdaterMessage};
 
 /* ═════════════════ 常量 ═════════════════ */
@@ -177,6 +177,22 @@ pub fn parse_version(s: &str) -> Option<[u16; 3]> {
     Some(out)
 }
 
+/// 版本号**字面量**白名单：只允许可选 v 前缀 + 三段纯数字。
+///
+/// 清单里的 `version` 会被拼进 `%TEMP%` 安装包文件名（[`installer_dest`]），
+/// 也会进 UI 与发布说明。`parse_version` 为兼容 beta 后缀做了宽松截断，
+/// 不能拿来当文件名校验：`"0.4.0.1\\..\\evil"` 会被它截成 0.4.0 后放行，
+/// 拼接后可能把安装包写到 %TEMP% 之外。凡是来自外部清单、要参与路径拼接
+/// 的版本号，必须先过这里。
+pub fn is_safe_version_literal(s: &str) -> bool {
+    let core = s.trim().trim_start_matches(['v', 'V']);
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// a 是否严格新于 b
 pub fn is_newer(a: [u16; 3], b: [u16; 3]) -> bool {
     a > b
@@ -239,6 +255,17 @@ pub async fn check() -> Result<CheckOutcome, UpdaterError> {
     .map_err(|e| UpdaterError::Network(trf("后台任务异常：{}", &[&e.to_string()])))?
 }
 
+/// 清单资产校验：镜像源是第三方代理，内容可被篡改；没有 SHA-256 就等于
+/// 放行任意可执行文件。只要清单提供了镜像源，摘要就是硬性前置条件。
+fn validate_asset(asset: &PlatformAsset) -> Result<(), UpdaterError> {
+    if !asset.mirror_urls.is_empty() && asset.sha256.is_none() {
+        return Err(UpdaterError::Parse(
+            tr("更新清单缺少 SHA-256 校验值，已拒绝下载").to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn check_blocking(url: &str) -> Result<CheckOutcome, UpdaterError> {
     let resp = ureq::get(url)
         .timeout(std::time::Duration::from_secs(10))
@@ -251,6 +278,10 @@ fn check_blocking(url: &str) -> Result<CheckOutcome, UpdaterError> {
     let manifest: UpdateManifest = serde_json::from_reader(resp.into_reader())
         .map_err(|e| UpdaterError::Parse(e.to_string()))?;
 
+    // 先用严格白名单挡住路径遍历 / 多余段，再用宽松解析器做版本比较
+    if !is_safe_version_literal(&manifest.version) {
+        return Err(UpdaterError::Parse(trf("非法版本号：{}", &[&manifest.version])));
+    }
     let remote = parse_version(&manifest.version)
         .ok_or_else(|| UpdaterError::Parse(trf("非法版本号：{}", &[&manifest.version])))?;
 
@@ -262,6 +293,8 @@ fn check_blocking(url: &str) -> Result<CheckOutcome, UpdaterError> {
         .platforms
         .get(PLATFORM_KEY)
         .ok_or(UpdaterError::NoPlatformAsset(PLATFORM_KEY))?;
+
+    validate_asset(asset)?;
 
     Ok(CheckOutcome::Update(Box::new(ReleaseInfo {
         version: manifest.version,
@@ -288,8 +321,14 @@ pub enum DownloadEvent {
 
 /// 默认安装包落盘位置：%TEMP%\cocole-setup-<版本>.exe
 pub fn installer_dest(version: &str) -> Option<PathBuf> {
+    if !is_safe_version_literal(version) {
+        return None;
+    }
     let dir = std::env::temp_dir();
-    let name = format!("cocole-setup-{}.exe", version.trim_start_matches(['v', 'V']));
+    let name = format!(
+        "cocole-setup-{}.exe",
+        version.trim_start_matches(['v', 'V'])
+    );
     Some(dir.join(name))
 }
 
@@ -343,6 +382,14 @@ fn download_blocking(
     cancel: &AtomicBool,
     tx: &tokio::sync::mpsc::UnboundedSender<DownloadEvent>,
 ) {
+    // 纵深防御：即使 ReleaseInfo 由别的路径构造，也不能出现
+    // 「多源下载 + 无摘要」的组合（check_blocking 已在入口拒收）。
+    if urls.len() > 1 && sha256.is_none() {
+        let _ = tx.send(DownloadEvent::Failed(
+            tr("更新清单缺少 SHA-256 校验值，已拒绝下载").to_string(),
+        ));
+        return;
+    }
     let mut last_err: Option<String> = None;
     for url in urls {
         match download_one(url, dest, cancel, tx) {
@@ -504,6 +551,39 @@ mod tests {
         assert_eq!(parse_version("v1.2.3-beta"), Some([1, 2, 3]));
         assert_eq!(parse_version("1.2"), Some([1, 2, 0]));
         assert_eq!(parse_version("abc"), None);
+    }
+
+    /// 回归：清单 version 会拼进安装包文件名，畸形串不得放行
+    #[test]
+    fn safe_version_literal_rejects_path_traversal() {
+        assert!(is_safe_version_literal("0.4.5"));
+        assert!(is_safe_version_literal("v0.4.5"));
+        assert!(!is_safe_version_literal(r"0.4.0.1\..\evil"));
+        assert!(!is_safe_version_literal("0.4.0/../../evil"));
+        assert!(!is_safe_version_literal("0.4.5-beta"));
+        assert!(!is_safe_version_literal("0..5"));
+        assert_eq!(installer_dest(r"0.4.0.1\..\evil"), None);
+        assert!(installer_dest("0.4.5").is_some());
+    }
+
+    /// 回归：有镜像源却没摘要时必须拒收（第三方代理不能被静默信任）
+    #[test]
+    fn mirror_without_sha256_is_rejected() {
+        let with_mirror: PlatformAsset = serde_json::from_str(
+            r#"{"url":"https://example.com/a.exe","mirror_urls":["https://mirror.example.com/a.exe"]}"#,
+        )
+        .unwrap();
+        assert!(validate_asset(&with_mirror).is_err());
+
+        let with_hash: PlatformAsset = serde_json::from_str(
+            r#"{"url":"https://example.com/a.exe","mirror_urls":["https://mirror.example.com/a.exe"],"sha256":"deadbeef"}"#,
+        )
+        .unwrap();
+        assert!(validate_asset(&with_hash).is_ok());
+
+        let no_mirror: PlatformAsset =
+            serde_json::from_str(r#"{"url":"https://example.com/a.exe"}"#).unwrap();
+        assert!(validate_asset(&no_mirror).is_ok());
     }
 
     #[test]

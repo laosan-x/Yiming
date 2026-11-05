@@ -286,6 +286,9 @@ pub enum WorkMessage {
     DoMatte,
     /// 重新扫描 models/ 目录（插件模型热发现）
     RescanModels,
+    /// 后台扫描结果（None = 扫描线程异常退出）。
+    /// 扫描会完整加载每个 .onnx 读输入尺寸，放阻塞线程池避免冻结 UI。
+    ModelsScanned(Option<(Option<PathBuf>, Vec<crate::core::nn::NnModelInfo>)>),
     /// 笔刷属性
     SetBrushSize(i32),
     /// 滚轮 / [ ] 快捷键的笔刷大小增量（参考项目 wheel 与 [ ] 键）

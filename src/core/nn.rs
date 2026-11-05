@@ -30,7 +30,7 @@
 use ort::session::Session;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::core::i18n::trf;
 
@@ -160,7 +160,9 @@ fn parse_input_size_from_stem(stem: &str) -> Option<usize> {
 fn read_input_size_from_onnx(path: &PathBuf) -> Option<usize> {
     // 确保 DLL 路径已设置（扫描阶段可能还没调用过 get_session）
     ensure_dylib_path();
-    // 轻量加载：只读元数据，不加载权重
+    // 注意：ort 2.x 没有「只读元数据」的轻量 API，commit_from_file 会**完整
+    // 加载权重**（490MB 模型可达 10s+）。因此调用它的 scan() 必须跑在后台
+    // 线程（见 WorkMessage::RescanModels），不能在 UI 线程同步调用。
     let mut builder = Session::builder().ok()?;
     let session = builder.commit_from_file(path).ok()?;
     let inputs = session.inputs();
@@ -496,11 +498,23 @@ pub fn nn_log(msg: &str) {
 }
 
 /// 会话缓存：模型加载要 10~15 秒（490MB），同一模型不该反复加载。
-/// 会话条目：会话 + 最近使用时间（闲置超时自动释放显存/内存）
+///
+/// 两级锁：`SESSIONS` 全局锁**只保护 HashMap 本身**（增删 / 更新时间戳，
+/// 均为微秒级）；真正的 `session.run()` 在每会话独立的 `Mutex<Session>` 上
+/// 跑（ort 2.x 的 run 需要 `&mut self`）。推理可达数十秒，若像旧实现那样
+/// 在全局锁内跑，UI 线程的 `release` / `release_all` / 空闲清扫会被整段
+/// 阻塞，表现为点一下按钮界面冻结几十秒。
+///
+/// `Arc` 还顺带解决并发释放：在途推理持有一份引用，`release_all` 从表里
+/// 移除后会话不会立刻析构（等推理结束自然回收），不会 use-after-free。
 struct SessionEntry {
-    session: Session,
+    session: Arc<Mutex<Session>>,
     last_used: std::time::Instant,
 }
+
+/// 会话缓存被并发释放时的哨兵错误（[`run_once`] 据此就地懒重载一次）
+const CACHE_LOST: &str = "会话缓存已丢失";
+const CACHE_RELEASED: &str = "会话已被释放，请重新执行抠图";
 
 /// 闲置超过此秒数的会话自动释放（下次推理重新加载）。
 /// DirectML 的 arena 在推理结束后不归还系统，大模型会话常驻会占满显存；
@@ -724,7 +738,10 @@ fn get_session(info: &NnModelInfo) -> Result<(), String> {
 
     map.insert(
         info.id.clone(),
-        SessionEntry { session, last_used: std::time::Instant::now() },
+        SessionEntry {
+            session: Arc::new(Mutex::new(session)),
+            last_used: std::time::Instant::now(),
+        },
     );
     Ok(())
 }
@@ -954,8 +971,6 @@ fn run_once(
     input: &[f32],
     size: usize,
 ) -> Result<(Vec<f32>, usize, usize), String> {
-    const CACHE_LOST: &str = "会话缓存已丢失";
-    const CACHE_RELEASED: &str = "会话已被释放，请重新执行抠图";
     match run_once_locked(info, input, size) {
         Err(e) if e == CACHE_LOST || e == CACHE_RELEASED => {
             nn_log("会话缓存被并发释放，就地重载会话后重试本次推理");
@@ -973,16 +988,22 @@ fn run_once_locked(
     size: usize,
 ) -> Result<(Vec<f32>, usize, usize), String> {
     SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut guard = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
-    let map = guard.as_mut().ok_or("会话缓存已丢失")?;
-    sweep_idle_sessions(map, Some(&info.id));
-    let session = match map.get_mut(&info.id) {
-        Some(e) => {
-            e.last_used = std::time::Instant::now();
-            &mut e.session
+    // 全局锁只用来取句柄：拿到 Arc 立即释放，推理不占用它。
+    // 这样 UI 的释放 / 重扫 / 空闲清扫在数十秒的推理期间仍能瞬时完成。
+    let handle: Arc<Mutex<Session>> = {
+        let mut guard = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+        let map = guard.as_mut().ok_or(CACHE_LOST)?;
+        sweep_idle_sessions(map, Some(&info.id));
+        match map.get_mut(&info.id) {
+            Some(e) => {
+                e.last_used = std::time::Instant::now();
+                Arc::clone(&e.session)
+            }
+            None => return Err(CACHE_RELEASED.to_string()),
         }
-        None => return Err("会话已被释放，请重新执行抠图".to_string()),
     };
+    // 同一模型的并发推理由这把每会话锁串行（全局推理闸门本就只允许一个）。
+    let mut session = handle.lock().unwrap_or_else(|p| p.into_inner());
 
     let input_name = session.inputs()[0].name().to_string();
     // 输入类型兼容：按模型输入元数据决定构造 f32 还是 f16 张量

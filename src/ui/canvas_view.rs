@@ -945,20 +945,35 @@ fn draw_compare_label(frame: &mut Frame, text: &str, x: f32, y: f32) {
 /// —— 等价于参考里挂在 `<canvas class="checker">` 上的背景。
 fn draw_checker_in(frame: &mut Frame, rect: Rectangle) {
     let cell = CHECKER_CELL;
-    let cols = (rect.width / cell).ceil() as i32 + 1;
-    let rows = (rect.height / cell).ceil() as i32 + 1;
-    for r in 0..rows {
-        for c in 0..cols {
+    // 只铺「图片矩形 ∩ 画布可见区」：高倍缩放下图片可达数万像素宽，
+    // 按整张图片逐格提交 quad 会有近百万次绘制调用，滚轮每档都重建一次。
+    let canvas = Rectangle::new(Point::ORIGIN, frame.size());
+    let Some(vis) = rect.intersection(&canvas) else {
+        return;
+    };
+    // 行列索引仍以图片左上角为锚点计算，保证裁剪前后棋盘相位不变
+    let c0 = ((vis.x - rect.x) / cell).floor() as i32;
+    let c1 = ((vis.x + vis.width - rect.x) / cell).ceil() as i32;
+    let r0 = ((vis.y - rect.y) / cell).floor() as i32;
+    let r1 = ((vis.y + vis.height - rect.y) / cell).ceil() as i32;
+    for r in r0..r1 {
+        for c in c0..c1 {
             let x = rect.x + c as f32 * cell;
             let y = rect.y + r as f32 * cell;
-            if x >= rect.x + rect.width || y >= rect.y + rect.height {
+            // 每格再裁到 vis ∩ rect，避免末列/末行溢出
+            let x0 = x.max(vis.x);
+            let y0 = y.max(vis.y);
+            let x1 = (x + cell).min(vis.x + vis.width).min(rect.x + rect.width);
+            let y1 = (y + cell).min(vis.y + vis.height).min(rect.y + rect.height);
+            if x1 <= x0 || y1 <= y0 {
                 continue;
             }
-            // 末列 / 末行裁到矩形边界内，避免溢出图片矩形
-            let w = (rect.x + rect.width - x).min(cell);
-            let h = (rect.y + rect.height - y).min(cell);
-            let color = if (r + c) % 2 == 0 { CHECKER_A() } else { CHECKER_B() };
-            frame.fill_rectangle(Point::new(x, y), Size::new(w, h), color);
+            let color = if (r + c) % 2 == 0 {
+                CHECKER_A()
+            } else {
+                CHECKER_B()
+            };
+            frame.fill_rectangle(Point::new(x0, y0), Size::new(x1 - x0, y1 - y0), color);
         }
     }
     let _ = Vector::ZERO;
