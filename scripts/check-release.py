@@ -15,6 +15,15 @@ import pathlib
 import re
 import sys
 
+# Windows CI runner（en-US）的 stdout 默认可能是 cp1252：脚本里的中文
+# 检查项一 print 就抛 UnicodeEncodeError，门禁以 exit 1 失败，而所有检查
+# 其实都通过了（v0.4.5 首次跑新发版流程时实测踩到）。输出统一强制 UTF-8，
+# 控制台不支持时降级替换，绝不让输出编码影响退出码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 

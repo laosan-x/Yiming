@@ -17,6 +17,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # Windows runner 默认 stdout 非 UTF-8，Python 脚本输出中文会抛
+    # UnicodeEncodeError；统一固定为 UTF-8（脚本自身也有 reconfigure 兜底）。
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
