@@ -13,6 +13,9 @@ on:
 
 permissions:
   contents: write
+  # 回填 manifest 后要显式 dispatch purge-cdn.yml（GITHUB_TOKEN 的 push
+  # 不会再触发其它工作流），workflow_dispatch 需要 actions: write
+  actions: write
 
 jobs:
   build:
@@ -164,3 +167,21 @@ jobs:
           git add update-manifest.json
           git commit -m "manifest: v$V 全量生成 size + sha256 (CI 自动)"
           git push origin ci-manifest:main
+
+      # GitHub 的防循环机制：由 GITHUB_TOKEN 发起的 push 不会再触发其它工作流，
+      # 所以上面这次 manifest 提交**不会**让 purge-cdn.yml 的 push 触发器生效，
+      # CDN 会继续缓存上一版清单 12h（v0.4.5 首次发版实测踩到）。
+      # 显式 workflow_dispatch 拉起它；该工作流会先确认 GitHub main 的 blob
+      # 已同步，再 purge 一次并轮询校验 CDN version+sha256，不一致即失败告警。
+      - name: Trigger CDN purge workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/purge-cdn.yml/dispatches" \
+            -d '{"ref":"main"}' \
+            -o /dev/null
+          echo "purge-cdn.yml dispatched on main"
