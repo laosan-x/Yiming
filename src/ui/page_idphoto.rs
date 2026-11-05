@@ -48,7 +48,7 @@ fn apply_rot(fg: &std::sync::Arc<image::RgbaImage>, rot: i32) -> std::sync::Arc<
 }
 
 /// 证件照抠图管线：优先使用用户选中的模型，否则回退 modnet.onnx，都没有则走色键。
-fn matte_payload(app: &App, payload: LoadedPayload) -> Task<Message> {
+fn matte_payload(app: &App, payload: LoadedPayload, seq: u64) -> Task<Message> {
     let model_info = if let Some(ref mid) = app.id.model_id {
         app.work.nn_models.iter().find(|m| &m.id == mid).cloned()
     } else {
@@ -87,12 +87,16 @@ fn matte_payload(app: &App, payload: LoadedPayload) -> Task<Message> {
                 display: None,
             }))
         },
-        |r| {
-            Message::IdPhoto(IdMessage::MatteDone(match r {
-                Some(Ok(v)) => Ok(v),
-                Some(Err(e)) => Err(e),
-                None => Err(tr("抠图线程异常退出").to_string()),
-            }))
+        move |r| {
+            // 回传发起时的世代，交由 update 丢弃过期帧
+            Message::IdPhoto(IdMessage::MatteDone(
+                seq,
+                match r {
+                    Some(Ok(v)) => Ok(v),
+                    Some(Err(e)) => Err(e),
+                    None => Err(tr("抠图线程异常退出").to_string()),
+                },
+            ))
         },
     )
 }
@@ -143,8 +147,9 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             s.queue[0].status = crate::app::QueueStatus::Running;
             s.queue_active = Some(0);
             s.decode_inflight = Some(0);
+            let seq = s.begin_load_chain();
             app.toast(trf("已导入 {} 张照片，开始逐张处理", &[&paths.len().to_string()]));
-            let first = load_id_path(paths[0].clone());
+            let first = load_id_path(paths[0].clone(), seq);
             // 流水线：立即预取解码第 2 张，与第 1 张的抠图并行
             if paths.len() > 1 {
                 let p2 = prefetch_decode(1, paths[1].clone());
@@ -153,22 +158,33 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             return first;
         }
         IdMessage::FilePicked(Some(path)) => {
+            let seq = s.begin_load_chain(); // 先清旧链状态，再置载入中
             s.decode_inflight = None;
             s.loading = true;
-            return load_id_path(path);
+            return load_id_path(path, seq);
         }
         IdMessage::FilePicked(None) => return Task::none(),
-        IdMessage::PhotoLoaded(Ok(payload)) => return start_photo(app, *payload),
+        IdMessage::PhotoLoaded(seq, Ok(payload)) => {
+            // 世代校验：选新图 / 切模型已开启新链，旧解码结果整包丢弃
+            if seq != s.load_seq {
+                return Task::none();
+            }
+            return start_photo(app, *payload);
+        }
         #[allow(dead_code)]
         IdMessage::MemoryPhoto(payload) => {
+            let seq = s.begin_load_chain(); // 先清旧链状态，再置忙
             s.src_path = None;
             s.loading = false;
             let t = imgcore::tex_display(&payload.rgba);
             s.src_handle = Some(Handle::from_rgba(t.w, t.h, t.bytes));
             s.busy = true;
-            return matte_payload(app, *payload);
+            return matte_payload(app, *payload, seq);
         }
-        IdMessage::PhotoLoaded(Err(e)) => {
+        IdMessage::PhotoLoaded(seq, Err(e)) => {
+            if seq != s.load_seq {
+                return Task::none();
+            }
             s.decode_inflight = None;
             s.loading = false;
             app.toast_err(trf("打开失败：{}", &[&e]));
@@ -183,7 +199,12 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             }
             return Task::none();
         }
-        IdMessage::MatteDone(Ok(payload)) => {
+        IdMessage::MatteDone(seq, Ok(payload)) => {
+            // 世代校验：换图 / 切模型 / 队列推进后，上一张的抠图结果不得
+            // 覆盖当前 fg，也不得触发 advance_queue 把队列项误标 Done。
+            if seq != s.load_seq {
+                return Task::none();
+            }
             // 移动语义：payload 里的 fg 直接进 Arc（原实现多一次全分辨率 clone）
             s.fg = Some(std::sync::Arc::new(payload.rgba));
             s.fg_preview = None;
@@ -198,7 +219,10 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
                 crate::app::schedule_session_sweep(),
             ]);
         }
-        IdMessage::MatteDone(Err(e)) => {
+        IdMessage::MatteDone(seq, Err(e)) => {
+            if seq != s.load_seq {
+                return Task::none();
+            }
             s.busy = false;
             app.toast_err(trf("抠图失败：{}", &[&e]));
             return advance_queue(app, false);
@@ -245,14 +269,21 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
             // 空串 = 标签未命中，视为清除显式选择（回退 modnet.onnx）
             s.model_id = if id.is_empty() { None } else { Some(id) };
             let src_path = s.src_path.clone();
-            if src_path.is_some() {
+            // 只有真的会重跑载入链时才推进世代：内存来源不重跑，不能作废
+            // 在途抠图（否则当前图的结果被吞掉，busy 也会永久残留）。
+            let seq = if src_path.is_some() {
+                Some(s.begin_load_chain())
+            } else {
+                None
+            };
+            if seq.is_some() {
                 s.busy = true;
                 s.loading = true;
             }
             app.persist();
             // 切模型立即生效：有源文件就重跑 载入→抠图 链（后台，UI 不冻结）
-            if let Some(p) = src_path {
-                return load_id_path(p);
+            if let (Some(p), Some(seq)) = (src_path, seq) {
+                return load_id_path(p, seq);
             }
             // 内存来源（示例图等）无原图可重跑，下次载入时生效
             return Task::none();
@@ -531,7 +562,8 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
                 s.queue_active = Some(i);
                 s.decode_inflight = Some(i);
                 let path = s.queue[i].path.clone();
-                return load_id_path(path);
+                let seq = s.begin_load_chain();
+                return load_id_path(path, seq);
             }
             return Task::none();
         }
@@ -580,8 +612,10 @@ pub fn update(app: &mut App, msg: IdMessage) -> Task<Message> {
 /// `queue_active` 为 None（非队列来源的载入）时只做无副作用推进。
 fn advance_queue(app: &mut App, ok: bool) -> Task<Message> {
     // 块内完成全部状态读写，出块后 s 借用结束（后面要拿 &mut App 调 start_photo）
-    let (consumed, fallback) = {
+    let (seq, consumed, fallback) = {
         let s = &mut app.id;
+        // 处理下一张 = 开启新链，作废上一张仍在途的回传
+        let seq = s.begin_load_chain();
         if let Some(i) = s.queue_active {
             if i < s.queue.len() {
                 s.queue[i].status = if ok {
@@ -610,7 +644,7 @@ fn advance_queue(app: &mut App, ok: bool) -> Task<Message> {
                 fallback = Some((j, s.queue[j].path.clone()));
             }
         }
-        (consumed, fallback)
+        (seq, consumed, fallback)
     };
     if let Some(r) = consumed {
         return match r {
@@ -622,7 +656,7 @@ fn advance_queue(app: &mut App, ok: bool) -> Task<Message> {
         };
     }
     if let Some((_, path)) = fallback {
-        return load_id_path(path);
+        return load_id_path(path, seq);
     }
     Task::none()
 }
@@ -678,7 +712,9 @@ fn start_photo(app: &mut App, payload: LoadedPayload) -> Task<Message> {
             prefetch_task = Some(prefetch_decode(j, p));
         }
     }
-    let matte_task = matte_payload(app, payload);
+    // 与本次载入同代（链入口处已推进），回传时据此丢弃过期帧
+    let seq = s.load_seq;
+    let matte_task = matte_payload(app, payload, seq);
     match prefetch_task {
         Some(t) => Task::batch([matte_task, t]),
         None => matte_task,
@@ -686,7 +722,7 @@ fn start_photo(app: &mut App, payload: LoadedPayload) -> Task<Message> {
 }
 
 /// 后台读图并送入抠图链路（选择 / 批量导入首张 / 示例图片共用）
-pub fn load_id_path(path: std::path::PathBuf) -> Task<Message> {
+pub fn load_id_path(path: std::path::PathBuf, seq: u64) -> Task<Message> {
     crate::ui::page_work::blocking_task(
         move || {
             // 性能诊断：COCOLE_DIAG=1 时输出解码耗时（导入阶段的主要开销）
@@ -698,28 +734,34 @@ pub fn load_id_path(path: std::path::PathBuf) -> Task<Message> {
             }
             r
         },
-        |r| {
-            Message::IdPhoto(IdMessage::PhotoLoaded(match r {
-                Some(Ok(l)) => Ok(Box::new(to_payload(l))),
-                Some(Err(e)) => Err(e),
-                None => Err(tr("读取线程异常退出").to_string()),
-            }))
+        move |r| {
+            Message::IdPhoto(IdMessage::PhotoLoaded(
+                seq,
+                match r {
+                    Some(Ok(l)) => Ok(Box::new(to_payload(l))),
+                    Some(Err(e)) => Err(e),
+                    None => Err(tr("读取线程异常退出").to_string()),
+                },
+            ))
         },
     )
 }
 
 /// 从内嵌字节加载示例图片（不依赖运行时文件系统）
-pub fn load_id_bytes(data: &'static [u8], name: &'static str) -> Task<Message> {
+pub fn load_id_bytes(data: &'static [u8], name: &'static str, seq: u64) -> Task<Message> {
     crate::ui::page_work::blocking_task(
         move || {
             imgcore::load_bytes(data, name).map_err(|e| e.to_string())
         },
-        |r| {
-            Message::IdPhoto(IdMessage::PhotoLoaded(match r {
-                Some(Ok(l)) => Ok(Box::new(to_payload(l))),
-                Some(Err(e)) => Err(e),
-                None => Err(tr("读取线程异常退出").to_string()),
-            }))
+        move |r| {
+            Message::IdPhoto(IdMessage::PhotoLoaded(
+                seq,
+                match r {
+                    Some(Ok(l)) => Ok(Box::new(to_payload(l))),
+                    Some(Err(e)) => Err(e),
+                    None => Err(tr("读取线程异常退出").to_string()),
+                },
+            ))
         },
     )
 }
@@ -1124,6 +1166,8 @@ fn batch_export_task(
     } else {
         parse_hex(ID_BGS[bg_idx.min(ID_BGS.len() - 1)].c)
     };
+    let job_count = jobs.len();
+    let folder_label = folder.to_string_lossy().to_string();
     Task::stream(iced::stream::channel(8, async move |mut out| {
         use iced::futures::SinkExt;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BatchExportEvent>();
@@ -1132,42 +1176,62 @@ fn batch_export_task(
             let mut fail = 0usize;
             for (idx, path) in jobs {
                 let _ = tx.send(BatchExportEvent::Start { idx });
-                match run_batch_one(
-                    &path,
-                    &folder,
-                    fmt,
-                    model_info.as_ref(),
-                    &matte_params,
-                    spec_idx,
-                    bg_color,
-                    erode,
-                    render_mode,
-                    zoom,
-                    off_y,
-                    dpi,
-                    rot,
-                ) {
-                    Ok(out_path) => {
+                // 单张整体兜底：坏图 / 越界 / 第三方解码 panic 只让这一张失败，
+                // 不打断后续张，也不会让线程提前退出导致终态缺失。
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_batch_one(
+                        &path,
+                        &folder,
+                        fmt,
+                        model_info.as_ref(),
+                        &matte_params,
+                        spec_idx,
+                        bg_color,
+                        erode,
+                        render_mode,
+                        zoom,
+                        off_y,
+                        dpi,
+                        rot,
+                    )
+                }));
+                match r {
+                    Ok(Ok(out_path)) => {
                         ok += 1;
                         eprintln!("[batch] ✓ {out_path}");
                         let _ = tx.send(BatchExportEvent::Done { idx });
                     }
-                    Err(e) => {
+                    outcome => {
                         fail += 1;
-                        let _ = tx.send(BatchExportEvent::Fail { idx, err: e });
+                        let err = match outcome {
+                            Ok(Err(e)) => e,
+                            Err(_) => tr("处理异常，已跳过该张").to_string(),
+                            Ok(Ok(_)) => unreachable!(),
+                        };
+                        let _ = tx.send(BatchExportEvent::Fail { idx, err });
                     }
                 }
             }
-            let _ = tx.send(BatchExportEvent::Finished {
-                ok,
-                fail,
-                folder: folder.to_string_lossy().to_string(),
-            });
+            (ok, fail)
         });
         while let Some(ev) = rx.recv().await {
             let _ = out.send(Message::IdPhoto(IdMessage::BatchEvent(ev))).await;
         }
-        let _ = handle.join();
+        // 终态由 stream 侧在 join 之后发送：即使后台线程因未捕获 panic 提前
+        // 退出，状态机也必定收到 Finished，batch_exporting 不会永久锁死。
+        let (ok, fail) = handle.join().unwrap_or_else(|_| {
+            eprintln!("[batch] 后台线程异常退出，已发送终止事件");
+            (0, job_count)
+        });
+        let _ = out
+            .send(Message::IdPhoto(IdMessage::BatchEvent(
+                BatchExportEvent::Finished {
+                    ok,
+                    fail,
+                    folder: folder_label,
+                },
+            )))
+            .await;
     }))
 }
 

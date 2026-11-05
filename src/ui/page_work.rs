@@ -187,7 +187,11 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         }
         WorkMessage::ImageLoaded(Ok(mut payload)) => {
             app.work.loading = false;
-            // 换图：作废仍在后台编码的旧导出（结果回传时 seq 不匹配会被丢弃），
+            // 换图：作废所有在途抠图（推进世代 / 通知取消 / 复位 busy），
+            // 否则 A 图的结果会覆盖到 B 图上；ONNX 推理不可中途打断，
+            // 但旧帧回传时会被 MaskDone 的世代校验整包丢弃。
+            app.work.invalidate_inflight_matte();
+            // 同样作废仍在后台编码的旧导出（结果回传时 seq 不匹配会被丢弃），
             // 同时复位忙碌标志，避免旧任务被丢弃后按钮永久禁用
             app.work.export_seq = app.work.export_seq.wrapping_add(1);
             app.work.exporting = false;
@@ -232,14 +236,34 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
         }
 
         /* ── 推理 ── */
-        WorkMessage::MaskDone(Ok(payload)) => {
+        WorkMessage::MaskDone(seq, result) => {
+            // 世代校验：换图（ImageLoaded）或新一次重算都会推进 recompute_seq，
+            // 迟到的旧帧整包丢弃——尤其不能让它复位 busy 或把 A 图结果套到 B 图。
+            if seq != app.work.recompute_seq {
+                return Task::none();
+            }
+            let payload = match result {
+                Ok(p) => p,
+                Err(e) => {
+                    app.work.busy = false;
+                    if e != tr("已取消") {
+                        app.toast_err(trf("抠图失败：{}", &[&e]));
+                    }
+                    return Task::none();
+                }
+            };
             let (iw, ih) = (payload.result.width(), payload.result.height());
             let (elapsed_ms, holes, bg) = (payload.elapsed_ms, payload.holes, payload.bg);
-            let fg_ratio =
-                payload.fg_count as f32 / (payload.mask.len().max(1)) as f32;
+            let fg_ratio = payload.fg_count as f32 / (payload.mask.len().max(1)) as f32;
 
             app.work.busy = false;
-            app.work.metrics = crate::app::Metrics { elapsed_ms, fg_ratio, w: iw, h: ih, holes };
+            app.work.metrics = crate::app::Metrics {
+                elapsed_ms,
+                fg_ratio,
+                w: iw,
+                h: ih,
+                holes,
+            };
             app.work.last_bg = bg;
             // 结果句柄直接用后台线程生成的两级显示字节（UI 线程零 resize）；
             // 全分辨率像素只保留 Arc 一份，供导出使用。
@@ -269,13 +293,6 @@ pub fn update(app: &mut App, msg: WorkMessage) -> Task<Message> {
                 Task::none(),
                 crate::app::schedule_session_sweep(),
             ]);
-        }
-        WorkMessage::MaskDone(Err(e)) => {
-            app.work.busy = false;
-            if e != tr("已取消") {
-                app.toast_err(trf("抠图失败：{}", &[&e]));
-            }
-            return Task::none();
         }
         WorkMessage::RecomputeNow(seq) => {
             // G4：只放行最后一次防抖请求。拖动滑块会排出多个定时器，
@@ -1228,6 +1245,13 @@ fn request_recompute(app: &mut App) -> Task<Message> {
 /// 否则走 SmartMatte 色键算法 —— 两条路径产出同一形状的 MaskPayload，
 /// 画笔 / 撤销 / 导出等下游完全复用。
 fn recompute(app: &mut App) -> Task<Message> {
+    // 统一防重入：Q 快捷键 / 换模型 / 按钮在上一轮推理未结束时不得再起一轮。
+    // 推理闸门本就会让第二轮排队数十秒，且两轮结果会互相覆盖；RecomputeNow
+    // 已在调用前做 busy 顺延，这里兜住其余所有入口。
+    if app.work.busy {
+        app.toast(tr("推理进行中，请稍候再试"));
+        return Task::none();
+    }
     let Some(src) = app.work.src.clone() else {
         return Task::none();
     };
@@ -1326,13 +1350,17 @@ fn recompute(app: &mut App) -> Task<Message> {
                 bg: res.bg,
             }))
         },
-        |r: Option<Result<Box<MaskPayload>, String>>| {
-            Message::Work(WorkMessage::MaskDone(match r {
-                Some(Ok(v)) => Ok(v),
-                Some(Err(e)) => Err(e),
-                // 取消不报错：高频拖动滑块时旧请求静默作废
-                None => Err(tr("已取消").to_string()),
-            }))
+        move |r: Option<Result<Box<MaskPayload>, String>>| {
+            // 回传时带上发起瞬间的世代，交由 MaskDone 分支丢弃过期帧
+            Message::Work(WorkMessage::MaskDone(
+                seq,
+                match r {
+                    Some(Ok(v)) => Ok(v),
+                    Some(Err(e)) => Err(e),
+                    // 取消不报错：高频拖动滑块时旧请求静默作废
+                    None => Err(tr("已取消").to_string()),
+                },
+            ))
         },
     )
 }

@@ -138,6 +138,7 @@
   "引导支持点击穿透：点遮罩空白处翻到下一步，点洞内目标（如「开始」卡）直接触发该操作，边做边学": "Clicks pass through the mask: tap empty area to advance to the next step, or tap the highlighted target (e.g. the Start card) to trigger that action directly",
   "{} 推理进行中，请稍候再试": "{} inference in progress, please try again shortly",
   "推理线程异常退出（模型可能不兼容当前图片）": "Inference thread exited unexpectedly (the model may be incompatible with this image)",
+  "处理异常，已跳过该张": "Processing error - this photo was skipped",
   "推理进行中，请稍候再试": "Inference in progress, please try again shortly",
   "修复证件照批量抠图异常后推理闸门被永久占用的问题（改为 RAII 守卫自动归还）": "Fixed the inference gate staying permanently occupied after a batch ID-photo matting error (now released automatically by an RAII guard)",
   "安装包补齐 onnxruntime_providers_shared.dll（DirectML 执行提供程序依赖）": "Installer now bundles onnxruntime_providers_shared.dll (required by the DirectML execution provider)",

@@ -105,9 +105,11 @@ pub fn update(app: &mut App, msg: HomeMessage) -> Task<Message> {
         HomeMessage::LoadSample => {
             // 加载内置示例图片（编译时内嵌，不依赖运行时文件系统）
             const SAMPLE_DATA: &[u8] = include_bytes!("../../tools/Example.jpg");
+            // 载入示例图 = 开启新的载入链，作废证件照页在途的回传
+            let seq = app.id.begin_load_chain();
             app.page = Page::IdPhoto;
             app.toast(tr("已载入示例图片"));
-            crate::ui::page_idphoto::load_id_bytes(SAMPLE_DATA, "Example.jpg")
+            crate::ui::page_idphoto::load_id_bytes(SAMPLE_DATA, "Example.jpg", seq)
         }
         HomeMessage::ResetParams => {
             // 参考 resetIdParams：重置证件照参数（非工作台蒙版参数）

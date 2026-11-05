@@ -235,12 +235,19 @@ pub fn crop(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> RgbaImage {
     RgbaImage::from_raw(w, h, out_raw).unwrap_or_else(|| RgbaImage::new(w, h))
 }
 
-/// 等比缩放（Lanczos3）
-pub fn resize(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {
-    let dyn_img = DynamicImage::ImageRgba8(img.clone());
-    dyn_img
-        .resize(w.max(1), h.max(1), image::imageops::FilterType::Lanczos3)
-        .into_rgba8()
+/// 精确尺寸缩放（Lanczos3）：输出**严格**为 w×h。
+///
+/// 不要用 `DynamicImage::resize` 代替：它是「等比适配到不超过 w×h」，当目标
+/// 宽高比与源图不完全一致时输出会小于请求尺寸（例 301×200 → 请求 73×48，
+/// 实际 72×48）。方图导出的合成循环按 dw/dh 全量索引，尺寸不足会 panic。
+/// 直接走 `imageops::resize` 还省掉一次全图 clone。
+pub fn resize_exact(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {
+    image::imageops::resize(
+        img,
+        w.max(1),
+        h.max(1),
+        image::imageops::FilterType::Lanczos3,
+    )
 }
 
 /* ═════════════════ 导出 ═════════════════ */
@@ -338,7 +345,8 @@ pub fn fit_export(fg: &RgbaImage, size: ExportSize, bg: Option<[u8; 3]>) -> Rgba
             let s = (t as f32 / w).min(t as f32 / h) * 0.92;
             let dw = (w * s).max(1.0) as u32;
             let dh = (h * s).max(1.0) as u32;
-            let small = resize(fg, dw, dh);
+            // 必须严格尺寸：下方合成循环按 dw/dh 全量 get_pixel
+            let small = resize_exact(fg, dw, dh);
             let mut canvas = RgbaImage::new(t, t);
             if let Some(c) = bg {
                 for px in canvas.pixels_mut() {
@@ -407,5 +415,45 @@ pub fn save_to_memory(
                 .map_err(|e| ImgError::Encode(e.to_string()))?;
             Ok(buf.into_inner())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solid(w: u32, h: u32, rgba: [u8; 4]) -> RgbaImage {
+        RgbaImage::from_fn(w, h, |_, _| image::Rgba(rgba))
+    }
+
+    /// 精确缩放的输出必须严格等于请求尺寸（DynamicImage::resize 会等比收缩）
+    #[test]
+    fn resize_exact_keeps_requested_dimensions() {
+        let src = solid(301, 200, [255, 0, 0, 255]);
+        let out = resize_exact(&src, 73, 48);
+        assert_eq!((out.width(), out.height()), (73, 48));
+    }
+
+    /// 回归：非整数缩放比例下方图导出不得越界 panic，前景区域严格为 dw×dh
+    #[test]
+    fn fit_export_square_no_panic_on_fractional_scale() {
+        let src = solid(301, 200, [255, 0, 0, 255]);
+        let t = 80u32;
+        let (w, h) = (src.width() as f32, src.height() as f32);
+        let s = (t as f32 / w).min(t as f32 / h) * 0.92;
+        let dw = (w * s).max(1.0) as u32;
+        let dh = (h * s).max(1.0) as u32;
+
+        let out = fit_export(&src, ExportSize::Square(t), Some([0, 0, 255]));
+        assert_eq!((out.width(), out.height()), (t, t));
+        let red = out.pixels().filter(|p| p.0[0] > 200 && p.0[2] < 50).count();
+        assert_eq!(red, (dw * dh) as usize, "前景区域必须严格为 dw×dh");
+    }
+
+    #[test]
+    fn fit_export_square_tiny_canvas() {
+        let src = solid(7, 5, [10, 200, 30, 128]);
+        let out = fit_export(&src, ExportSize::Square(1), None);
+        assert_eq!((out.width(), out.height()), (1, 1));
     }
 }

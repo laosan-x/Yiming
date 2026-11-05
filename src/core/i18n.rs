@@ -277,6 +277,7 @@ const EN: &[(&str, &str)] = &[
     // 补齐：推理提示与历史 changelog 条目（此前 EN 模式回退中文）
     ("{} 推理进行中，请稍候再试", "{} inference in progress, please try again shortly"),
     ("推理线程异常退出（模型可能不兼容当前图片）", "Inference thread exited unexpectedly (the model may be incompatible with this image)"),
+    ("处理异常，已跳过该张", "Processing error - this photo was skipped"),
     ("推理进行中，请稍候再试", "Inference in progress, please try again shortly"),
     ("修复证件照批量抠图异常后推理闸门被永久占用的问题（改为 RAII 守卫自动归还）", "Fixed the inference gate staying permanently occupied after a batch ID-photo matting error (now released automatically by an RAII guard)"),
     ("安装包补齐 onnxruntime_providers_shared.dll（DirectML 执行提供程序依赖）", "Installer now bundles onnxruntime_providers_shared.dll (required by the DirectML execution provider)"),

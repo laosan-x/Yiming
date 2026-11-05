@@ -255,8 +255,12 @@ pub enum WorkMessage {
     OpenPath(PathBuf),
     /// 解码完成
     ImageLoaded(Result<Box<LoadedPayload>, String>),
-    /// 蒙版计算完成
-    MaskDone(Result<Box<MaskPayload>, String>),
+    /// 蒙版计算完成。
+    ///
+    /// 首参 `seq` = 发起时快照的 `WorkState.recompute_seq`：换图 / 新一次重算
+    /// 会推进世代，迟到的旧结果（含 Err）必须整包丢弃，否则 A 图的结果、
+    /// 蒙版与显示句柄会覆盖到 B 图上，且 `busy` 会被误复位。
+    MaskDone(u64, Result<Box<MaskPayload>, String>),
     /// 画笔 / 橡皮擦松手（或撤销 / 重置蒙版）后，后台线程把「蒙版 → 结果图」的合成回传。
     ///
     /// 与 `MaskDone` 走同一条后台线程链路，但只改蒙版、不跑模型推理。
@@ -416,11 +420,13 @@ pub enum IdMessage {
     FilePicked(Option<PathBuf>),
     /// 批量导入结果（多选；参考项目 btnIdToolbarBatch）
     FilesPicked(Vec<PathBuf>),
-    PhotoLoaded(Result<Box<LoadedPayload>, String>),
+    /// 解码完成；首参为发起载入时快照的 `IdState.load_seq`，过期帧整包丢弃
+    PhotoLoaded(u64, Result<Box<LoadedPayload>, String>),
     /// 内存图片直接进入抠图链路（保留供未来使用）
     #[allow(dead_code)]
     MemoryPhoto(Box<LoadedPayload>),
-    MatteDone(Result<Box<LoadedPayload>, String>),
+    /// 抠图完成；首参同 `PhotoLoaded` 的世代校验（防旧图结果串号覆盖）
+    MatteDone(u64, Result<Box<LoadedPayload>, String>),
     SetSpec(usize),
     SetBg(usize),
     /// 切换渲染模式（纯色 / 渐变 / 透明底 / 原背景）

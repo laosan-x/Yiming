@@ -189,7 +189,8 @@ pub struct WorkState {
     pub src: Option<std::sync::Arc<RgbaImage>>,
     /// 色键场缓存（grad/dist 只依赖图像，跨参数调用复用；换图/旋转/裁剪时作废）
     pub fields: std::sync::Arc<std::sync::Mutex<crate::core::matting::FieldCache>>,
-    /// 蒙版重算序列号：防抖到期后只采纳最新一次
+    /// 蒙版重算世代：回传时与发起瞬间的 seq 比对，丢弃过期帧；
+    /// 换图 / 新一次重算都会推进（见 [`WorkState::invalidate_inflight_matte`]）
     pub recompute_seq: u64,
     /// 防抖序列号：滑块每次变化自增，只有最后一次的定时器允许触发重算
     pub debounce_seq: u64,
@@ -270,6 +271,20 @@ pub struct WorkState {
     pub nn_models: Vec<crate::core::nn::NnModelInfo>,
     /// 实际使用的模型目录（None = 目录不存在）
     pub models_dir: Option<std::path::PathBuf>,
+}
+
+impl WorkState {
+    /// 作废所有在途抠图：推进世代 + 通知取消 + 复位 busy。
+    ///
+    /// 换图时必须调用：否则上一张图那条不可中断的后台推理仍会回传，把
+    /// A 图的 result / mask / 显示句柄整套覆盖到 B 图上，并误复位 busy。
+    /// 世代推进后 `MaskDone(seq, ..)` 会整包丢弃旧帧；取消令牌让色键路径
+    /// 与推理闸门轮询尽早退出（ONNX 的 `run()` 本身无法中途打断）。
+    pub fn invalidate_inflight_matte(&mut self) {
+        self.recompute_seq += 1;
+        let _ = self.matte_cancel_tx.send(self.recompute_seq);
+        self.busy = false;
+    }
 }
 
 impl Default for WorkState {
@@ -413,6 +428,10 @@ pub struct IdState {
     pub meta: String,
     /// 后台渲染序列号：每次编辑参数自增，回传时比对，丢弃过期帧
     pub render_seq: u64,
+    /// 载入→抠图链的世代：每次开始载入新照片（选图 / 切模型 / 队列下一张）
+    /// 自增；`PhotoLoaded` / `MatteDone` 携带发起时的 seq，过期帧整包丢弃，
+    /// 避免上一张的抠图结果覆盖当前照片或把队列项误标 Done。
+    pub load_seq: u64,
     /// 缓存的单张预览 meta（切到单张视图无需重算即可得到文案）
     pub single_meta: String,
     /// 缓存的排版预览 meta（切到排版视图无需重算即可得到文案）
@@ -448,6 +467,23 @@ pub struct IdState {
     pub custom_bg_hex: String,
 }
 
+impl IdState {
+    /// 开启一条新的「载入→抠图」链，返回该链的世代号。
+    ///
+    /// 选新图 / 切模型 / 队列推进到下一张时调用：旧链的 `PhotoLoaded` 与
+    /// `MatteDone` 回传时 seq 不再相等，会被整包丢弃（不覆盖 fg、不复位
+    /// busy、不误标队列项完成）。
+    pub fn begin_load_chain(&mut self) -> u64 {
+        self.load_seq = self.load_seq.wrapping_add(1);
+        // 旧链作废后它的回传不会再复位状态，必须在这里清干净；否则新链
+        // 解码失败时会留下永久 busy（spinner 不停、按钮一直禁用）。
+        // 各入口随后按需重新置 loading / busy，start_photo 会置 busy=true。
+        self.busy = false;
+        self.loading = false;
+        self.load_seq
+    }
+}
+
 impl Default for IdState {
     fn default() -> Self {
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(0u64);
@@ -476,6 +512,7 @@ impl Default for IdState {
             screen_dpi: get_system_dpi(),
             meta: String::new(),
             render_seq: 0,
+            load_seq: 0,
             single_meta: String::new(),
             sheet_meta: String::new(),
             queue: Vec::new(),
@@ -1756,5 +1793,58 @@ fn window_icon() -> Option<window::Icon> {
             log(&format!("[icon] 窗口图标创建失败: {:?}", e));
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：换图必须一次调用同时推进世代、通知取消、复位 busy。
+    /// 旧帧 seq=7 与当前世代不再相等，MaskDone 会整包丢弃。
+    #[test]
+    fn invalidate_inflight_matte_advances_generation_and_cancels() {
+        let mut w = WorkState {
+            recompute_seq: 7,
+            busy: true,
+            ..Default::default()
+        };
+        let _ = w.matte_cancel_tx.send(7);
+
+        w.invalidate_inflight_matte();
+
+        assert_eq!(w.recompute_seq, 8);
+        assert_eq!(*w.matte_cancel_rx.borrow(), 8);
+        assert!(!w.busy);
+    }
+
+    /// 回归：每次开启新载入链都会推进世代，旧帧 seq 与当前不再相等
+    #[test]
+    fn begin_load_chain_invalidates_inflight_frames() {
+        let mut id = IdState {
+            busy: true,
+            loading: true,
+            ..Default::default()
+        };
+        let s1 = id.begin_load_chain();
+        assert_eq!(s1, 1);
+        assert_eq!(id.load_seq, s1);
+        // 旧链已被作废，其回传不会再来复位状态 → 这里必须清干净
+        assert!(!id.busy);
+        assert!(!id.loading);
+        let s2 = id.begin_load_chain();
+        assert_eq!(s2, 2);
+        assert_ne!(s1, id.load_seq);
+    }
+
+    #[test]
+    fn invalidate_inflight_matte_is_repeatedly_safe() {
+        let mut w = WorkState::default();
+        w.invalidate_inflight_matte();
+        w.invalidate_inflight_matte();
+        w.invalidate_inflight_matte();
+        assert_eq!(w.recompute_seq, 3);
+        assert_eq!(*w.matte_cancel_rx.borrow(), 3);
+        assert!(!w.busy);
     }
 }

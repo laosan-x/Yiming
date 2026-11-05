@@ -245,8 +245,15 @@ fn config_path() -> Option<std::path::PathBuf> {
 }
 
 impl Config {
-    /// 读取配置；任何失败都回落到默认值（不因配置损坏而启动失败）
+    /// 读取配置；任何失败都回落到默认值（不因配置损坏而启动失败）。
+    /// 读出的数值统一经 [`Config::sanitize`] 收敛，避免外部 JSON 越界。
     pub fn load() -> Self {
+        let mut cfg = Self::read_from_disk();
+        cfg.sanitize();
+        cfg
+    }
+
+    fn read_from_disk() -> Self {
         let Some(path) = config_path() else {
             return Self::default();
         };
@@ -257,6 +264,32 @@ impl Config {
             eprintln!("[config] 解析失败，回落默认配置：{e}");
             Self::default()
         })
+    }
+
+    /// 把外部 JSON 的数值字段收敛到代码允许的范围。
+    ///
+    /// config.json 可被手工编辑 / 旧版本迁移 / 半写入：视图层对索引有
+    /// `min(len-1)` 兜底，但后台渲染 / 导出 / 批量线程直接 `ID_SIZES[spec_idx]`，
+    /// 越界会 panic——批量线程 panic 后 `Finished` 永不回传，批量导出会永久
+    /// 锁死。同理极端 `export_size` / `dpi` 会触发巨量分配或除零。
+    /// 因此在唯一入口处一次性收敛，后续所有链路都拿到合法值。
+    fn sanitize(&mut self) {
+        use crate::core::idphoto::{ID_BGS, ID_PAPERS, ID_SIZES};
+
+        let id = &mut self.id;
+        id.spec_idx = id.spec_idx.min(ID_SIZES.len().saturating_sub(1));
+        id.bg_idx = id.bg_idx.min(ID_BGS.len().saturating_sub(1));
+        id.paper_idx = id.paper_idx.min(ID_PAPERS.len().saturating_sub(1));
+        id.zoom = id.zoom.clamp(80, 200);
+        id.off_y = id.off_y.clamp(-45, 45);
+        id.erode = id.erode.clamp(0, 3);
+        id.rot = id.rot.clamp(-15, 15);
+        id.dpi = id.dpi.clamp(72, 1200);
+
+        // 非 UI 预设值一律回落「原始尺寸」，杜绝 RgbaImage::new(t, t) 巨量分配
+        if !ExportSize::all().contains(&self.export_size()) {
+            self.export_size = 1;
+        }
     }
 
     pub fn save(&self) {
@@ -275,5 +308,64 @@ impl Config {
         self.recent.retain(|r| r.path != path);
         self.recent.insert(0, RecentEntry { path: path.to_string(), name: name.to_string() });
         self.recent.truncate(12);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::idphoto::{ID_BGS, ID_PAPERS, ID_SIZES};
+
+    /// 回归：外部 JSON 的越界索引 / 极端数值必须在 load 入口被收敛，
+    /// 否则后台线程直接索引常量表会 panic（批量导出会永久锁死）。
+    #[test]
+    fn sanitize_clamps_out_of_range_config() {
+        let mut c = Config::default();
+        c.id.spec_idx = usize::MAX;
+        c.id.bg_idx = usize::MAX;
+        c.id.paper_idx = usize::MAX;
+        c.id.zoom = 999_999;
+        c.id.off_y = -10_000;
+        c.id.erode = -7;
+        c.id.rot = 90;
+        c.id.dpi = 0;
+        c.export_size = 999_999;
+
+        c.sanitize();
+
+        assert_eq!(c.id.spec_idx, ID_SIZES.len() - 1);
+        assert_eq!(c.id.bg_idx, ID_BGS.len() - 1);
+        assert_eq!(c.id.paper_idx, ID_PAPERS.len() - 1);
+        assert_eq!(c.id.zoom, 200);
+        assert_eq!(c.id.off_y, -45);
+        assert_eq!(c.id.erode, 0);
+        assert_eq!(c.id.rot, 15);
+        assert_eq!(c.id.dpi, 72);
+        assert_eq!(c.export_size, 1);
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_config_unchanged() {
+        let mut c = Config::default();
+        c.id.spec_idx = 3;
+        c.id.bg_idx = 2;
+        c.id.dpi = 600;
+        c.export_size = 800;
+        c.sanitize();
+        assert_eq!(
+            (c.id.spec_idx, c.id.bg_idx, c.id.dpi, c.export_size),
+            (3, 2, 600, 800)
+        );
+    }
+
+    /// 序列化往返后仍能收敛（模拟手工编辑过的 config.json）
+    #[test]
+    fn sanitize_after_json_roundtrip() {
+        let mut c = Config::default();
+        c.id.spec_idx = 9999;
+        let text = serde_json::to_string(&c).expect("序列化应成功");
+        let mut restored: Config = serde_json::from_str(&text).expect("反序列化应成功");
+        restored.sanitize();
+        assert_eq!(restored.id.spec_idx, ID_SIZES.len() - 1);
     }
 }
