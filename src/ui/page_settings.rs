@@ -747,6 +747,15 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.8",
+            "2026-11-07",
+            tr("修复"),
+            &[
+                tr("修复检查更新在部分网络下失败：新增多个可达清单源并逐个回退，不再只依赖两个常被干扰的域名"),
+                tr("检查更新失败时列出全部源的具体失败原因，便于快速定位网络问题"),
+            ],
+        ),
+        (
             "0.4.7",
             "2026-11-07",
             tr("修复"),

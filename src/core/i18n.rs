@@ -650,6 +650,10 @@ const EN: &[(&str, &str)] = &[
     // v0.4.7 更新日志
     ("修复发布链路中更新清单 CDN 刷新偶发失败的问题，新版本提示可及时送达", "Fixed an intermittent CDN cache-purge failure in the release pipeline so update notifications arrive promptly"),
     ("修正上一版更新说明中的文字笔误；本版无客户端功能变更", "Corrected a typo in the previous release notes; no client-side feature changes in this version"),
+
+    // v0.4.8 更新日志
+    ("修复检查更新在部分网络下失败：新增多个可达清单源并逐个回退，不再只依赖两个常被干扰的域名", "Fixed update checks failing on some networks: added reachable manifest mirrors with sequential fallback instead of relying on two blocked domains"),
+    ("检查更新失败时列出全部源的具体失败原因，便于快速定位网络问题", "Update-check failures now list the reason for every source, making network issues easy to diagnose"),
 ];
 
 fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {
