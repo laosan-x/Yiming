@@ -747,6 +747,15 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.7",
+            "2026-11-07",
+            tr("修复"),
+            &[
+                tr("修复发布链路中更新清单 CDN 刷新偶发失败的问题，新版本提示可及时送达"),
+                tr("修正上一版更新说明中的文字笔误；本版无客户端功能变更"),
+            ],
+        ),
+        (
             "0.4.6",
             "2026-11-05",
             tr("新功能"),

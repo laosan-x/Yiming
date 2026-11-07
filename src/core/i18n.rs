@@ -646,6 +646,10 @@ const EN: &[(&str, &str)] = &[
     ("批量队列升级：每个文件项显示缩略图，点击即可在编辑窗口打开并高亮同步（工作台与证件照页）", "Batch queue upgrade: file items now show thumbnails; click one to open it in the editor with synced highlight (Workbench and ID Photo pages)"),
     ("证件照批量队列移入右侧侧栏，不再挤压预览舞台", "ID Photo batch queue moved into the right sidebar, no longer squeezing the preview stage"),
     ("证件照批量导出支持相纸排版：每张原图一页含裁剪线的相纸 JPG，排版参数在导出启动时快照", "ID Photo batch export supports print layout: one cut-line print sheet JPG per source photo, layout parameters snapshotted when the export starts"),
+
+    // v0.4.7 更新日志
+    ("修复发布链路中更新清单 CDN 刷新偶发失败的问题，新版本提示可及时送达", "Fixed an intermittent CDN cache-purge failure in the release pipeline so update notifications arrive promptly"),
+    ("修正上一版更新说明中的文字笔误；本版无客户端功能变更", "Corrected a typo in the previous release notes; no client-side feature changes in this version"),
 ];
 
 fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {
