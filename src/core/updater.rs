@@ -46,15 +46,20 @@ use crate::message::{Message, UpdaterMessage};
 /* ═════════════════ 常量 ═════════════════ */
 
 /// 清单候选地址（按序尝试，任一成功即用）：
-/// 1. jsDelivr CDN——中国大陆可直连（raw.githubusercontent.com 在境内被墙，
-///    是 v0.4.1 用户「检查更新失败：timed out」的根因）；
-/// 2. raw.githubusercontent.com——官方源，作为 jsDelivr 不可用时的兜底。
+/// 1. jsDelivr CDN 主域——通常最快；
+/// 2. fastly.jsdelivr.net——同一 CDN 的备用域名，主域被 TLS 干扰时仍可达
+///    （v0.4.7 发版实测：主域 + raw 同时握手失败，而该域名正常返回 0.4.7 清单）；
+/// 3. gh-proxy.com 代理的 raw 源——与安装包 `mirror_urls` 同族的境内可达镜像；
+/// 4. raw.githubusercontent.com——官方源兜底（境内常被墙，v0.4.1 已踩过）。
 ///
+/// ⚠️ 下载安装包有多源镜像，检查清单也必须有多源，否则「能下载但检查不到更新」。
 /// 注意 jsDelivr 对 /gh/ 有 ~12h 边缘缓存，发版后需 purge
 /// （curl "https://purge.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json"，
 /// 仅接受 GET；现已由 purge-cdn.yml 在清单变更推送后自动执行）。
 pub const MANIFEST_URLS: &[&str] = &[
     "https://cdn.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json",
+    "https://fastly.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json",
     "https://raw.githubusercontent.com/laosan-x/Yiming/main/update-manifest.json",
 ];
 /// 清单不可用时的兜底下载页（浏览器打开）
@@ -234,22 +239,49 @@ pub fn should_auto_check(last_check: Option<u64>) -> bool {
     }
 }
 
+/// 从 URL 取主机名，用于把「哪个源挂了」写进错误信息
+pub fn source_label(url: &str) -> String {
+    url.split("//")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+}
+
+/// 汇总所有清单源的失败原因。旧实现只保留最后一个源的错误，
+/// 用户看到的永远是 raw 的报错，误以为只有官方源有问题。
+pub fn summarize_manifest_failures(failures: &[(String, String)]) -> String {
+    if failures.is_empty() {
+        return "无可用清单源".to_string();
+    }
+    failures
+        .iter()
+        .map(|(src, err)| format!("{src}: {err}"))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// 检查更新（异步入口）：逐个候选源拉取清单 → 比对版本 → 摘出当前平台资产
 pub async fn check() -> Result<CheckOutcome, UpdaterError> {
     let urls = manifest_urls();
     tokio::task::spawn_blocking(move || {
-        let mut last: Option<UpdaterError> = None;
+        let mut failures: Vec<(String, String)> = Vec::new();
         for url in urls {
             match check_blocking(&url) {
                 Ok(outcome) => return Ok(outcome),
-                // 平台缺失 / 版本解析失败是清单本身的问题，换源也没用，直接返回
-                Err(e @ (UpdaterError::NoPlatformAsset(_) | UpdaterError::Parse(_))) => {
-                    return Err(e)
-                }
-                Err(e) => last = Some(e),
+                // 清单合法但缺当前平台：各源是同一份清单，换源没意义
+                Err(e @ UpdaterError::NoPlatformAsset(_)) => return Err(e),
+                // 网络失败、HTTP 非 2xx、以及代理返回 HTML 被当成解析失败，
+                // 都只说明「该源不可用」，继续换下一个；v0.4.7 实测环境下
+                // 前两个源会同时 TLS 失败，若在此中断可达源就永远轮不到。
+                Err(e) => failures.push((source_label(&url), e.to_string())),
             }
         }
-        Err(last.unwrap_or(UpdaterError::Network("无可用清单源".into())))
+        Err(UpdaterError::Network(summarize_manifest_failures(
+            &failures,
+        )))
     })
     .await
     .map_err(|e| UpdaterError::Network(trf("后台任务异常：{}", &[&e.to_string()])))?
@@ -551,6 +583,55 @@ mod tests {
         assert_eq!(parse_version("v1.2.3-beta"), Some([1, 2, 3]));
         assert_eq!(parse_version("1.2"), Some([1, 2, 0]));
         assert_eq!(parse_version("abc"), None);
+    }
+
+    /// 回归 v0.4.7：检查更新不能只依赖 cdn.jsdelivr.net + raw 两个源，
+    /// 实测二者在同一网络下会同时 TLS 失败，而备用域名与镜像可达。
+    #[test]
+    fn manifest_sources_include_reachable_fallbacks() {
+        assert_eq!(MANIFEST_URLS.len(), 4);
+        assert!(MANIFEST_URLS[0].starts_with("https://cdn.jsdelivr.net/"));
+        assert!(MANIFEST_URLS
+            .iter()
+            .any(|u| u.starts_with("https://fastly.jsdelivr.net/")));
+        assert!(MANIFEST_URLS
+            .iter()
+            .any(|u| u.starts_with("https://gh-proxy.com/")));
+        assert!(MANIFEST_URLS
+            .iter()
+            .any(|u| u.starts_with("https://raw.githubusercontent.com/")));
+    }
+
+    #[test]
+    fn source_label_extracts_host_only() {
+        assert_eq!(
+            source_label("https://cdn.jsdelivr.net/gh/laosan-x/Yiming@main/update-manifest.json"),
+            "cdn.jsdelivr.net"
+        );
+        assert_eq!(
+            source_label("https://gh-proxy.com/https://raw.githubusercontent.com/a/b.json"),
+            "gh-proxy.com"
+        );
+    }
+
+    /// 回归：所有源都失败时必须列出每个源，而不是只报最后一个
+    #[test]
+    fn failures_are_aggregated_not_overwritten() {
+        let f = vec![
+            (
+                "cdn.jsdelivr.net".to_string(),
+                "TLS handshake failed".to_string(),
+            ),
+            (
+                "raw.githubusercontent.com".to_string(),
+                "connection reset".to_string(),
+            ),
+        ];
+        let s = summarize_manifest_failures(&f);
+        assert!(s.contains("cdn.jsdelivr.net"));
+        assert!(s.contains("raw.githubusercontent.com"));
+        assert!(s.contains("TLS handshake failed"));
+        assert_eq!(summarize_manifest_failures(&[]), "无可用清单源");
     }
 
     /// 回归：清单 version 会拼进安装包文件名，畸形串不得放行
