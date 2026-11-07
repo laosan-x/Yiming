@@ -1,18 +1,18 @@
 {
-  "version": "0.4.7",
-  "notes": "壹鸣 WonderLand v0.4.7\n- 维护版本：修复发布链路中「更新清单 CDN 刷新」偶发失败的问题，新版本提示可及时送达，避免旧版客户端延迟看到更新\n- 修正上一版更新说明中的文字笔误\n- 本版不包含客户端功能变更，图片处理、批量队列与导出行为与 v0.4.6 完全一致",
+  "version": "0.4.8",
+  "notes": "壹鸣 WonderLand v0.4.8\n- 修复检查更新在部分网络下失败：新增 jsDelivr 备用域名与境内镜像源，清单源从 2 个扩到 4 个并逐个回退。此前 cdn.jsdelivr.net 与 raw.githubusercontent.com 同时不可达时，检查更新必然失败，而实际可达的源不在候选列表中\n- 镜像返回非清单内容时不再中断换源；所有源失败时按主机名列出每个源的具体原因，便于快速定位网络问题\n- 提示：v0.4.6 / v0.4.7 客户端内置的是旧的检查逻辑，需手动安装一次本版安装包，之后自动更新即可恢复正常",
   "pub_date": "2026-11-07",
   "mandatory": false,
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.7/cocole-iced-v0.4.7-setup.exe",
+      "url": "https://github.com/laosan-x/Yiming/releases/download/v0.4.8/cocole-iced-v0.4.8-setup.exe",
       "mirror_urls": [
-        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.7/cocole-iced-v0.4.7-setup.exe",
-        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.7/cocole-iced-v0.4.7-setup.exe",
-        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.7/cocole-iced-v0.4.7-setup.exe"
+        "https://gh-proxy.com/https://github.com/laosan-x/Yiming/releases/download/v0.4.8/cocole-iced-v0.4.8-setup.exe",
+        "https://ghfast.top/https://github.com/laosan-x/Yiming/releases/download/v0.4.8/cocole-iced-v0.4.8-setup.exe",
+        "https://ghproxy.net/https://github.com/laosan-x/Yiming/releases/download/v0.4.8/cocole-iced-v0.4.8-setup.exe"
       ],
-      "size": 39758426,
-      "sha256": "982a8af54a1e5ab42d5fee605f197eaa49b340c8c36f4d35fc5cb4925e0f8e27"
+      "size": 39769490,
+      "sha256": "2a4bdba199f64e0e96c6eaf6288b3b784a1a5c68b64a2ef67db25e1e37db8daa"
     }
   }
 }
