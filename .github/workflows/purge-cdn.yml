@@ -33,15 +33,22 @@ jobs:
 
       - name: Wait for GitHub main to serve the pushed manifest
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # 用 commit 内的 blob sha 比对，避免工作区换行符转换干扰
           expected=$(git rev-parse HEAD:update-manifest.json)
           echo "expected blob: $expected"
+          # v0.4.6 发版实测：匿名调用 Contents API 在 Actions 共享出口 IP 上会
+          # 被限流，curl -fsS 在 `bash -e` 下直接让步骤 0 秒退出，被误报成
+          # 「同步超时」。改为带 github.token 认证，并把瞬时失败收进重试循环。
           for i in $(seq 1 12); do
-            remote=$(curl -fsS \
+            remote=$(curl -sS --fail \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/update-manifest.json?ref=main" \
-              | python3 -c 'import sys,json; print(json.load(sys.stdin)["sha"])')
-            echo "attempt $i: main blob = $remote"
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["sha"])' 2>/dev/null) || true
+            echo "attempt $i: main blob = ${remote:-<API 请求失败>}"
             if [ "$remote" = "$expected" ]; then
               echo "GitHub main in sync"
               exit 0
