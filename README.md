@@ -103,7 +103,7 @@ git clone https://github.com/laosan-x/Yiming.git
 cd Yiming
 
 cargo build --release
-# 产物：target/release/cocole-iced.exe（约 15 MB，GUI 子系统）
+# 产物：target/release/cocole-iced.exe（约 21 MB，GUI 子系统）
 ```
 
 > [!TIP]
@@ -146,23 +146,25 @@ cocole-iced <图片路径>        # 启动后直接载入该图并自动抠图
 
 ### 模型下载
 
-神经网络抠图的权重文件不入库，**一键下载（推荐）**：
+神经网络抠图的权重文件不入库。**推荐在应用内下载**：设置 → 模型插件 → 模型下载，一键获取并自动加入可选列表（ModelScope 国内直连，SHA-256 强校验）。
+
+命令行方式（自动跳过已存在的文件）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File models\download.ps1
 # 或只下某个模型：-Only modnet
 ```
 
-脚本内置全部官方源（已验证可达），自动跳过已存在的文件。各模型也可手动获取：
+三个轻量模型已随安装包内置，无需下载；高精度模型与手动获取来源如下：
 
-| 文件 | 来源 |
-|---|---|
-| `modnet.onnx` | [MODNet](https://github.com/ZHKKKe/MODNet)（社区 ONNX 转换：[Xenova/modnet](https://huggingface.co/Xenova/modnet)） |
-| `birefnet_1024.onnx` | [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)（官方 ONNX：[releases v1](https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1)） |
-| `BEN2_Base.onnx` | [BEN2](https://huggingface.co/PramaLLC/BEN2) |
-| `model_fp16.onnx` | [InSPyReNet](https://github.com/plemeri/InSPyReNet)（官方无 ONNX 发布，可用同架构的 [isnet-general-use.onnx](https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx)） |
-| `u2netp.onnx` | [U²-Net](https://github.com/xuebinqin/U-2-Net)（官方权重：[rembg 托管](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)） |
-| `face_detection_yunet_2023mar.onnx` | [OpenCV Zoo](https://github.com/opencv/opencv_zoo) |
+| 文件 | 大小 | 来源 |
+|---|---|---|
+| `BEN2_Base.onnx` | 213 MB | [BEN2](https://huggingface.co/PramaLLC/BEN2) · 应用内一键下载（托管镜像：[laosan2026/cocole-matting-onnx](https://modelscope.cn/models/laosan2026/cocole-matting-onnx)） |
+| `birefnet_1024.onnx` | 490 MB | BiRefNet 通用高精度 · 应用内一键下载（托管镜像：[laosan2026/cocole-matting-onnx](https://modelscope.cn/models/laosan2026/cocole-matting-onnx)） |
+| `model_fp16.onnx` | 190 MB | 通用显著性分割 · 应用内一键下载（托管镜像：[laosan2026/cocole-matting-onnx](https://modelscope.cn/models/laosan2026/cocole-matting-onnx)） |
+| `modnet.onnx` | 25 MB | [MODNet](https://github.com/ZHKKKe/MODNet)（社区 ONNX 转换：[Xenova/modnet](https://huggingface.co/Xenova/modnet)，已内置） |
+| `u2netp.onnx` | 4.4 MB | [U²-Net](https://github.com/xuebinqin/U-2-Net)（[rembg 托管](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)，已内置） |
+| `face_detection_yunet_2023mar.onnx` | 0.2 MB | [OpenCV Zoo](https://github.com/opencv/opencv_zoo)（已内置） |
 
 可通过环境变量 `COCOLE_MODEL_DIR` 指定自定义模型目录。
 
