@@ -3,8 +3,9 @@
 #   powershell -ExecutionPolicy Bypass -File models\download.ps1            # download all
 #   powershell -ExecutionPolicy Bypass -File models\download.ps1 -Only u2netp   # download one
 #
-# All URLs verified 2026-11-02. Weights belong to their upstream projects,
-# see THIRD-PARTY-NOTICES.md and README acknowledgements for licenses.
+# Heavy models use the SAME ModelScope mirror as the in-app downloader
+# (Settings -> Model plugins -> Model download), verified 2026-11-21;
+# the app checks SHA-256 on those files. Light trio keeps original upstreams.
 param(
     [string]$Dir = "$PSScriptRoot",
     [string]$Only = ""
@@ -15,20 +16,16 @@ if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Path $Dir | Out-Null 
 
 # name -> url (saved as <name>.onnx in models/)
 $Models = [ordered]@{
-    # OpenCV Zoo (Apache-2.0) - face detection
+    # OpenCV Zoo (Apache-2.0) - face detection (bundled with installer)
     "face_detection_yunet_2023mar" = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-    # rembg release assets (U^2-Net official weights, Apache-2.0 project) - 4 MB
+    # rembg release assets (U^2-Net official weights, Apache-2.0 project) - 4.4 MB (bundled)
     "u2netp" = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
-    # Xenova/modnet (MODNet photographic portrait matting, Apache-2.0) - 24 MB
+    # Xenova/modnet (MODNet photographic portrait matting, Apache-2.0) - 25 MB (bundled)
     "modnet" = "https://huggingface.co/Xenova/modnet/resolve/main/onnx/model.onnx"
-    # PramaLLC/BEN2 official (MIT) - 212 MB
-    "BEN2_Base" = "https://huggingface.co/PramaLLC/BEN2/resolve/main/BEN2_Base.onnx"
-    # ZhengPeng7 official ONNX export (MIT) - 927 MB
-    "birefnet_1024" = "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-general-epoch_244.onnx"
-    # InSPyReNet-based general matting (rembg official weights, 170 MB).
-    # NOTE: official InSPyReNet repo ships no ONNX; this is the same-architecture
-    # general-use export. If you already have model_fp16.onnx, keep yours.
-    "isnet-general-use" = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
+    # Heavy models - ModelScope direct link (ureq/Invoke-WebRequest follow the 302 to CDN).
+    "BEN2_Base" = "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=BEN2_Base.onnx"
+    "birefnet_1024" = "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=birefnet_1024.onnx"
+    "model_fp16" = "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=model_fp16.onnx"
 }
 
 foreach ($name in $Models.Keys) {

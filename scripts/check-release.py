@@ -47,9 +47,9 @@ def main() -> int:
 
     readme = read("README.md")
     check(
-        "README 版本徽章",
-        f"Version-{v}-" in readme,
-        f"应含 Version-{v}-",
+        "README Release 徽章（动态，随发布自动更新）",
+        "img.shields.io/github/v/release/laosan-x/Yiming" in readme,
+        "应含指向 releases/latest 的动态徽章",
     )
     check(
         "README 安装包文件名",

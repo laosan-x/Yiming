@@ -10,7 +10,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)](#系统要求)
 [![Rust](https://img.shields.io/badge/Rust-1.82%2B-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/GUI-iced%200.14-purple)](https://github.com/iced-rs/iced)
-[![Release](https://img.shields.io/badge/Version-0.4.9-green)](#安装)
+[![Release](https://img.shields.io/github/v/release/laosan-x/Yiming?sort=semver)](https://github.com/laosan-x/Yiming/releases/latest)
 
 </div>
 
