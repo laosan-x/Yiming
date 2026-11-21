@@ -942,6 +942,16 @@ fn privacy_panel<'a>(app: &'a App) -> Element<'a, Message> {
 fn changelog_panel<'a>() -> Element<'a, Message> {
     let entries: &[(&str, &str, &str, &[&str])] = &[
         (
+            "0.4.9",
+            "2026-11-21",
+            tr("新功能"),
+            &[
+                tr("模型插件新增「模型下载」：设置页置顶卡片一键下载 BEN2 / BiRefNet 1024 / InSPyReNet，含实时进度、取消与失败重试"),
+                tr("下载走 ModelScope 国内直连并按官方 SHA-256 强校验，完成后自动重扫模型目录、立即出现在可选列表"),
+                tr("下载失败提示改为精简原因，修正长错误信息挤爆布局导致文字竖排的问题"),
+            ],
+        ),
+        (
             "0.4.8",
             "2026-11-07",
             tr("修复"),
