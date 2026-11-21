@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::core::i18n::trf;
+use crate::core::i18n::{tr, trf};
 
 /* ═════════════════ 模型发现 ═════════════════ */
 
@@ -1089,11 +1089,493 @@ pub fn matte(info: &NnModelInfo, rgba: &[u8], width: usize, height: usize) -> Re
     Ok(mask)
 }
 
+/* ═════════════════ 模型下载（设置页「模型插件」一键下载） ═════════════════ */
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 一个可下载模型的清单条目。
+///
+/// 内置清单覆盖社区常见抠图模型；用户可用 `COCOLE_MODEL_MANIFEST`
+/// 指向自己的 JSON 清单（格式见 [`load_download_catalog`]）来增删/换源，
+/// 无需改代码重新编译。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DownloadableModel {
+    /// 清单内的唯一标识（英文名，如 `u2net`）
+    pub id: String,
+    /// 中文展示名
+    pub name: String,
+    /// 一句话说明（用途 / 特点）
+    pub desc: String,
+    /// 落地文件名（必须是纯文件名，白名单校验防路径穿越）
+    pub file: String,
+    /// 模型直链（GitHub Releases / 镜像，任一可达即可）
+    pub url: String,
+    /// 备用镜像（可选，主源失败时逐个尝试）
+    #[serde(default)]
+    pub mirrors: Vec<String>,
+    /// 预期大小（MB，仅用于 UI 展示；不参与校验）
+    #[serde(default)]
+    pub size_mb: f64,
+    /// SHA-256 摘要（可选，填写则强校验；强烈建议提供）
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+/// 内置可下载模型清单（2026-11-21 定稿：BEN2 / BiRefNet-1024 / InSPyReNet）。
+///
+/// 三项统一托管在本项目自己的 ModelScope 仓库 `laosan2026/cocole-matting-onnx`
+/// （2026-11-21 用户提供，本机实测三文件 HEAD 200、字节与 SHA-256 与本地完全一致）。
+/// 用 ModelScope 国内直连是因为本机 huggingface / hf-mirror / gh-proxy 均超时；
+/// ureq 自动跟随 302 到 cdn-lfs-cn-*.modelscope.cn。
+/// `file` 是用户确认的三个确切文件名；builtin_spec 认 BEN2_Base/model_fp16，
+/// birefnet_1024 靠 `_1024` 后缀解析尺寸，下载后扫描即可得到正确输入边长。
+/// sha256 填仓库官方值：下载后强校验，保证拿到与本地验证过的完全相同的权重。
+///
+/// 说明文案走 i18n 的关键字由 UI 层用 tr() 翻译，这里只存中文原文。
+pub const BUILTIN_CATALOG_JSON: &str = r#"[
+  {
+    "id": "ben2",
+    "name": "BEN2（背景消除）",
+    "desc": "BEN2 通用背景消除，固定 1024 输入",
+    "file": "BEN2_Base.onnx",
+    "url": "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=BEN2_Base.onnx",
+    "mirrors": [],
+    "size_mb": 212.6,
+    "sha256": "22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101"
+  },
+  {
+    "id": "birefnet1024",
+    "name": "BiRefNet 1024（高精度抠图）",
+    "desc": "BiRefNet 高精度通用抠图，动态分辨率输入",
+    "file": "birefnet_1024.onnx",
+    "url": "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=birefnet_1024.onnx",
+    "mirrors": [],
+    "size_mb": 489.8,
+    "sha256": "9dc47db40d113090ba5d7a13d8fcfd9ee4eda510ce92613219b2fe19da4746f6"
+  },
+  {
+    "id": "inspyrenet",
+    "name": "InSPyReNet（人像与通用）",
+    "desc": "IS-Net 系通用显著性分割，人像边缘干净",
+    "file": "model_fp16.onnx",
+    "url": "https://modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx/repo?Revision=master&FilePath=model_fp16.onnx",
+    "mirrors": [],
+    "size_mb": 189.9,
+    "sha256": "467c47c71739e2e4b37364476045caa74246f968e2e7ff2dc4c9720c80717f4c"
+  }
+]"#;
+
+/// 读取可下载模型清单：优先 `COCOLE_MODEL_MANIFEST` 指向的 JSON 文件，
+/// 否则用内置清单。任何解析错误都静默回退内置清单（设置页不该因清单
+/// 写错就整个崩掉），并把错误写进 nn 日志便于排查。
+pub fn load_download_catalog() -> Vec<DownloadableModel> {
+    if let Ok(p) = std::env::var("COCOLE_MODEL_MANIFEST") {
+        if !p.is_empty() {
+            match std::fs::read_to_string(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|s| serde_json::from_str::<Vec<DownloadableModel>>(&s).map_err(|e| e.to_string()))
+            {
+                Ok(list) => {
+                    nn_log(&format!("使用外部模型清单 {p}：{} 个条目", list.len()));
+                    return list.into_iter().filter(|m| valid_model_file(&m.file)).collect();
+                }
+                Err(e) => nn_log(&format!("外部模型清单 {p} 读取失败，回退内置清单：{e}")),
+            }
+        }
+    }
+    serde_json::from_str(BUILTIN_CATALOG_JSON).unwrap_or_default()
+}
+
+/// 文件名白名单：只允许纯文件名（不含路径分隔符 / 盘符 / 父目录引用），
+/// 防止恶意 manifest 把文件写到 models/ 外面去。
+pub fn valid_model_file(file: &str) -> bool {
+    let stem = file.strip_suffix(".onnx").unwrap_or("");
+    !stem.is_empty() // 拒绝 `.onnx` 这类空主干文件名
+        && file.to_ascii_lowercase().ends_with(".onnx")
+        && !file.contains(['/', '\\', ':', '\0'])
+        && !file.contains("..")
+        && file == std::path::Path::new(file).file_name().and_then(|s| s.to_str()).unwrap_or("")
+}
+
+/// 下载事件（模型下载线程 → UI，经 Task::stream 保序回传）。
+#[derive(Debug, Clone)]
+pub enum ModelDownloadEvent {
+    /// 进度（received/total 字节）
+    Progress { id: String, received: u64, total: Option<u64> },
+    /// 单个模型下载完成（文件已就位，等待自动重扫）
+    Done { id: String, file: String },
+    /// 失败（含中文原因）
+    Failed { id: String, msg: String },
+}
+
+/// 下载结果（同步 API 的返回，便于测试与调用方判断）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadOutcome {
+    /// 下载完成并落盘
+    Done { file: String },
+    /// 目标文件已存在，跳过（重复下载处理）
+    AlreadyExists { file: String },
+    /// 用户取消
+    Cancelled,
+    /// 失败原因
+    Failed(String),
+}
+
+/// 把 ureq 的冗长错误（含完整 URL / 多层前缀）压成一句短原因。
+/// 例："https://x/y.onnx: Connection Failed: Connect error: ...(os error 10060)"
+///     → "连接超时（os error 10060）"。UI 空间有限，长串会把文字挤成竖排。
+fn short_net_err(err: &str) -> String {
+    // 保留末尾 os error 编号（若有），便于区分超时/拒绝/无网络
+    let os_err = err.rfind("os error ").map(|i| {
+        let tail = &err[i..];
+        let end = tail.find(')').unwrap_or(tail.len());
+        tail[..end].to_string()
+    });
+    let lower = err.to_ascii_lowercase();
+    let reason = if lower.contains("timed out") || lower.contains("10060") || lower.contains("timeout") {
+        tr("连接超时")
+    } else if lower.contains("connection failed") || lower.contains("connect error") {
+        tr("无法连接服务器")
+    } else if lower.contains("dns") || lower.contains("resolve") {
+        tr("域名解析失败")
+    } else if lower.contains("connection reset") {
+        tr("连接被重置")
+    } else {
+        tr("网络错误")
+    };
+    match os_err {
+        Some(o) if !o.is_empty() => format!("{reason}（{o}）"),
+        _ => reason.to_string(),
+    }
+}
+
+/// 下载单个模型（阻塞式，调用方须放到后台线程）。
+///
+/// 流程：目标已存在 → 直接返回 AlreadyExists（不覆盖用户文件）；
+/// 否则流式下载到 `models/<file>.part` → SHA-256 校验（清单提供时）→
+/// 原子改名到 `models/<file>`。取消令牌置位时清理 `.part` 半成品。
+///
+/// `cancel` 传入的 AtomicBool 置位后线程在下一个 64KB 块边界退出。
+pub fn download_model_blocking(
+    model: &DownloadableModel,
+    dest_dir: &std::path::Path,
+    cancel: &Arc<AtomicBool>,
+    progress: impl Fn(u64, Option<u64>),
+) -> DownloadOutcome {
+    use sha2::Digest;
+    use std::io::{Read, Write};
+
+    if !valid_model_file(&model.file) {
+        return DownloadOutcome::Failed(tr("模型文件名非法，已拒绝下载").to_string());
+    }
+
+    let dest = dest_dir.join(&model.file);
+    if dest.exists() {
+        // 重复下载：不覆盖，直接告诉 UI「已存在」
+        return DownloadOutcome::AlreadyExists { file: model.file.clone() };
+    }
+
+    // 确保目录存在（models/ 首次下载时可能还没有）
+    if let Err(e) = std::fs::create_dir_all(dest_dir) {
+        return DownloadOutcome::Failed(trf("无法创建模型目录：{}", &[&e.to_string()]));
+    }
+    let part = dest_dir.join(format!("{}.part", model.file));
+    let _ = std::fs::remove_file(&part); // 清理上次中断的残留
+
+    let mut urls = vec![model.url.clone()];
+    urls.extend(model.mirrors.iter().cloned());
+    let mut last_err = String::new();
+
+    for url in &urls {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&part);
+            return DownloadOutcome::Cancelled;
+        }
+        let resp = match ureq::get(url).call() {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = short_net_err(&e.to_string());
+                continue;
+            }
+        };
+        let total = resp.header("content-length").and_then(|v| v.parse::<u64>().ok());
+        let mut reader = resp.into_reader();
+        let file = match std::fs::File::create(&part) {
+            Ok(f) => f,
+            Err(e) => {
+                last_err = trf("无法创建下载文件：{}", &[&e.to_string()]);
+                continue;
+            }
+        };
+        let mut writer = std::io::BufWriter::new(file);
+        let mut buf = [0u8; 64 * 1024];
+        let mut received = 0u64;
+        let mut hasher = sha2::Sha256::new();
+        let mut cancelled = false;
+
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    hasher.update(&buf[..n]);
+                    received += n as u64;
+                    if writer.write_all(&buf[..n]).is_err() {
+                        last_err = tr("写入下载文件失败").to_string();
+                        break;
+                    }
+                    progress(received, total);
+                }
+                Err(e) => {
+                    last_err = short_net_err(&e.to_string());
+                    break;
+                }
+            }
+        }
+        let _ = writer.flush();
+        drop(writer);
+
+        if cancelled {
+            let _ = std::fs::remove_file(&part);
+            return DownloadOutcome::Cancelled;
+        }
+        if !last_err.is_empty() {
+            let _ = std::fs::remove_file(&part);
+            last_err.clear();
+            continue; // 换下一个镜像源
+        }
+
+        // SHA-256 强校验（镜像源内容一致性兜底）
+        if let Some(expect) = &model.sha256 {
+            let hash = format!("{:x}", hasher.finalize());
+            if !hash.eq_ignore_ascii_case(expect) {
+                let _ = std::fs::remove_file(&part);
+                last_err = tr("下载文件校验失败（SHA-256 不匹配），已丢弃").to_string();
+                continue;
+            }
+        }
+
+        // 原子改名：.part → 正式文件名（同一目录内 rename 是原子的）
+        if let Err(e) = std::fs::rename(&part, &dest) {
+            let _ = std::fs::remove_file(&part);
+            return DownloadOutcome::Failed(trf("保存模型失败：{}", &[&e.to_string()]));
+        }
+        nn_log(&format!("模型下载完成：{} ({:.1}MB)", model.file, received as f64 / 1048576.0));
+        return DownloadOutcome::Done { file: model.file.clone() };
+    }
+
+    let _ = std::fs::remove_file(&part);
+    DownloadOutcome::Failed(if last_err.is_empty() { tr("无可用下载源").to_string() } else { last_err })
+}
+
 /* ═════════════════ 冒烟测试（cargo test --offline） ═════════════════ */
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 模型下载：文件名白名单必须挡住路径穿越 / 非 .onnx / 空名。
+    #[test]
+    fn download_valid_model_file_rejects_unsafe_names() {
+        assert!(valid_model_file("u2net.onnx"));
+        assert!(valid_model_file("my_model_1024.onnx"));
+        // 路径穿越 / 分隔符 / 盘符 / 非 onnx 一律拒绝
+        assert!(!valid_model_file("../evil.onnx"));
+        assert!(!valid_model_file("sub\\evil.onnx"));
+        assert!(!valid_model_file("C:evil.onnx"));
+        assert!(!valid_model_file("model.exe"));
+        assert!(!valid_model_file(""));
+        assert!(!valid_model_file(".onnx"));
+    }
+
+    /// 模型下载：内置清单可解析、且每条都是合法文件名。
+    #[test]
+    fn download_builtin_catalog_is_valid() {
+        let catalog = load_download_catalog();
+        assert!(!catalog.is_empty(), "内置清单不应为空");
+        for m in &catalog {
+            assert!(valid_model_file(&m.file), "清单条目文件名非法：{}", m.file);
+            assert!(m.url.starts_with("http://") || m.url.starts_with("https://"), "URL 非法：{}", m.url);
+            // 回归锁： downloads 必须指向真实上游源，禁止填回不存在的仓库
+            // （曾出现 github.com/laosan-x/Yiming 404 导致下载必失败）
+            let u = m.url.to_ascii_lowercase();
+            assert!(
+                u.contains("modelscope.cn/api/v1/models/laosan2026/cocole-matting-onnx")
+                    || u.contains("github.com/danielgatis/rembg")
+                    || u.contains("huggingface.co/")
+                    || u.contains("github.com/opencv/opencv_zoo"),
+                "下载源不是已核验的上游仓库：{}", m.url
+            );
+        }
+        // id 唯一
+        let mut ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), catalog.len(), "清单 id 重复");
+
+        // 回归锁：清单必须恰好是用户指定的三个模型，落盘名固定
+        // （BEN2 / BiRefNet-1024 / InSPyReNet），防止再被改回别的组合
+        let mut files: Vec<&str> = catalog.iter().map(|m| m.file.as_str()).collect();
+        files.sort();
+        assert_eq!(
+            files,
+            vec!["BEN2_Base.onnx", "birefnet_1024.onnx", "model_fp16.onnx"],
+            "下载清单模型集合与预期不符：{files:?}"
+        );
+
+        // 三个落盘名下载后都必须能被识别为 1024 输入（builtin_spec 或 _1024 后缀）
+        for m in &catalog {
+            let lower = m.file.to_ascii_lowercase();
+            let okay = builtin_spec(&lower).is_some()
+                || parse_input_size_from_stem(m.file.trim_end_matches(".onnx")) == Some(1024);
+            assert!(okay, "{} 下载后无法解析出正确输入尺寸", m.file);
+        }
+
+        // 回归锁：三项的官方 SHA-256 + 大小必须与 laosan2026 仓库一致，
+        // 防止再被换成字节不符的官方仓库模型（曾误用 onnx-community 467MB / isnet 170MB）
+        let expected: &[(&str, f64, &str)] = &[
+            ("BEN2_Base.onnx", 212.6, "22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101"),
+            ("birefnet_1024.onnx", 489.8, "9dc47db40d113090ba5d7a13d8fcfd9ee4eda510ce92613219b2fe19da4746f6"),
+            ("model_fp16.onnx", 189.9, "467c47c71739e2e4b37364476045caa74246f968e2e7ff2dc4c9720c80717f4c"),
+        ];
+        for (file, size, sha) in expected {
+            let m = catalog.iter().find(|x| x.file == *file).expect("清单缺项");
+            assert!((m.size_mb - size).abs() < 0.2, "{} 大小标注错误：{}", file, m.size_mb);
+            assert_eq!(m.sha256.as_deref(), Some(*sha), "{} SHA-256 错误", file);
+            assert!(m.url.contains("laosan2026/cocole-matting-onnx"), "{} 下载源错误", file);
+        }
+    }
+
+    /// 模型下载：目标文件已存在时必须返回 AlreadyExists（重复下载不覆盖）。
+    #[test]
+    fn download_skips_existing_file() {
+        let dir = std::env::temp_dir().join(format!("cocole_dl_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = "existing_test_model.onnx";
+        std::fs::write(dir.join(file), b"already here").expect("写测试文件失败");
+        let model = DownloadableModel {
+            id: "test".into(), name: "test".into(), desc: "".into(), file: file.into(),
+            url: "https://example.invalid/never-called.onnx".into(),
+            mirrors: vec![], size_mb: 0.0, sha256: None,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let outcome = download_model_blocking(&model, &dir, &cancel, |_, _| {});
+        assert!(matches!(outcome, DownloadOutcome::AlreadyExists { .. }), "重复下载应跳过：{outcome:?}");
+        // 原文件未被覆盖
+        assert_eq!(std::fs::read(dir.join(file)).unwrap(), b"already here");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 模型下载端到端：本地 TCP 服务器提供字节 → download_model_blocking
+    /// 流式落盘 → SHA-256 校验 → 原子改名 → 再次下载命中 AlreadyExists。
+    /// 自包含（不依赖外网），验证进度回调与重复下载处理。
+    #[test]
+    fn download_e2e_local_server_progress_hash_and_dedup() {
+        use sha2::Digest;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let body: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let hash = format!("{:x}", sha2::Sha256::digest(&body));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("绑定本地端口失败");
+        let port = listener.local_addr().unwrap().port();
+        let body_srv = body.clone();
+        let srv = std::thread::spawn(move || {
+            // 只服务一次请求足够本测试用
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = stream.read(&mut req);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    body_srv.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body_srv);
+                let _ = stream.flush();
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("cocole_dl_e2e_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let model = DownloadableModel {
+            id: "e2e".into(), name: "E2E".into(), desc: "".into(),
+            file: "e2e_model.onnx".into(),
+            url: format!("http://127.0.0.1:{port}/e2e_model.onnx"),
+            mirrors: vec![], size_mb: 0.0, sha256: Some(hash),
+        };
+        let progress_calls = std::cell::Cell::new(0u32);
+        let out = download_model_blocking(&model, &dir, &cancel, |_, _| progress_calls.set(progress_calls.get() + 1));
+        assert!(matches!(out, DownloadOutcome::Done { .. }), "下载应成功：{out:?}");
+        assert!(progress_calls.get() > 0, "应有进度回调");
+        assert_eq!(std::fs::read(dir.join("e2e_model.onnx")).unwrap(), body, "落盘内容应一致");
+        // 再次下载 → AlreadyExists，且不覆盖
+        let out2 = download_model_blocking(&model, &dir, &cancel, |_, _| {});
+        assert!(matches!(out2, DownloadOutcome::AlreadyExists { .. }), "重复下载应跳过：{out2:?}");
+        let _ = srv.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 完整闭环：真实 ONNX 字节经本地 HTTP 下载 → scan 发现 → 进入可选列表。
+    /// 用项目自带的 u2netp.onnx 作数据源，不依赖外网，验证「下载后立即可用」链路。
+    #[test]
+    fn download_then_scan_enters_optional_model_list() {
+        use sha2::Digest;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models").join("u2netp.onnx");
+        let body = match std::fs::read(&src) {
+            Ok(b) => b,
+            Err(_) => return, // 本机无该文件时跳过（CI 精简环境）
+        };
+        let hash = format!("{:x}", sha2::Sha256::digest(&body));
+        // 用内置规格名：scan_dir 走 builtin_spec 分支，不在测试进程里加载 ORT DLL
+        // （独立测试进程加载 ORT 会在退出时 STATUS_STACK_BUFFER_OVERRUN）
+        let file = "u2netp.onnx";
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("绑定端口失败");
+        let port = listener.local_addr().unwrap().port();
+        let body_srv = body.clone();
+        let srv = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = stream.read(&mut req);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    body_srv.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body_srv);
+                let _ = stream.flush();
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("cocole_dl_scan_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let model = DownloadableModel {
+            id: "scan_e2e".into(), name: "扫描闭环".into(), desc: "".into(),
+            file: file.into(),
+            url: format!("http://127.0.0.1:{port}/{file}"),
+            mirrors: vec![], size_mb: 0.0, sha256: Some(hash),
+        };
+        let out = download_model_blocking(&model, &dir, &cancel, |_, _| {});
+        assert!(matches!(out, DownloadOutcome::Done { .. }), "下载应成功：{out:?}");
+
+        // 关键断言：扫描目录后，刚下载的模型出现在可选清单里
+        let found = scan_dir(&dir);
+        let entry = found.iter().find(|m| m.file == file)
+            .expect("下载的模型未出现在可选列表");
+        assert!(entry.size_mb > 0.0, "模型体积应有效");
+        assert_eq!(entry.id, format!("nn:{file}"), "模型 id 应可供下拉选中");
+        let _ = srv.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 白底 + 中央黑色方块 → 跑 U²-NetP（4.4MB，CPU 数秒）。
     /// 断言：扫描发现模型、DLL 加载成功、推理产出有效蒙版（0/255 两态都有，

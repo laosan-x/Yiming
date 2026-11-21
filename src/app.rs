@@ -123,6 +123,9 @@ pub struct App {
     /* ─ 自更新 ── */
     pub updater: UpdaterState,
 
+    /* ─ 模型下载（设置页「模型插件」） ── */
+    pub model_download: ModelDownloadState,
+
     /* ─ 文件拖拽 ── */
     /// 有文件拖拽悬停在窗口上（首页拖放区高亮用；落下/离开后复位）
     pub drop_hover: bool,
@@ -630,6 +633,39 @@ impl Default for UpdaterState {
     }
 }
 
+/* ═════════════════ 模型下载状态（设置页「模型插件」） ═════════════════ */
+
+/// 模型下载状态机：一次只下载一个模型（简化状态管理，下载队列非必需）。
+#[derive(Debug, Clone)]
+pub enum ModelDownloadStatus {
+    /// 空闲
+    Idle,
+    /// 下载中（保留 id / 名称用于 UI 显示进度）
+    Downloading {
+        id: String,
+        name: String,
+        received: u64,
+        total: Option<u64>,
+    },
+    /// 成功（文件已落盘并触发重扫）
+    Done { id: String },
+    /// 失败（原因直接给 UI）
+    Failed { id: String, msg: String },
+}
+
+/// 模型下载模块状态（挂在 App 上）
+pub struct ModelDownloadState {
+    pub status: ModelDownloadStatus,
+    /// 下载取消令牌
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Default for ModelDownloadState {
+    fn default() -> Self {
+        Self { status: ModelDownloadStatus::Idle, cancel: None }
+    }
+}
+
 /* ═════════════════ 启动 ═════════════════ */
 
 impl App {
@@ -700,6 +736,7 @@ impl App {
             cpu_text: sys_text::cpu(),
             mem_text: sys_text::mem(),
             updater: UpdaterState::default(),
+            model_download: ModelDownloadState::default(),
             drop_hover: false,
             theme_mode: boot_mode,
             system_dark,

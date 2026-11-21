@@ -3,11 +3,11 @@
 //! 与原项目一致分七类：模型与推理引擎 / 计算后端 / 模型插件 / 远程后端 /
 //! 导出默认值 / 隐私 / 更新日志。
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, Space};
+use iced::widget::{button, column, container, pick_list, progress_bar, row, scrollable, text, text_input, Space};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::{Alignment, Color, Element, Length, Task};
 
-use crate::app::{App, UpdateStatus};
+use crate::app::{App, ModelDownloadStatus, UpdateStatus};
 use crate::core::image::{ExportFormat, ExportSize};
 use crate::core::nn::ModelCategory;
 use crate::core::updater;
@@ -107,6 +107,104 @@ pub fn update(app: &mut App, msg: SettingsMessage) -> Task<Message> {
             // 不在 UI 线程完整加载 490MB 权重，避免点一下按钮界面冻结十几秒。
             return Task::done(Message::Work(crate::message::WorkMessage::RescanModels));
         }
+        SettingsMessage::DownloadModel(id) => {
+            use crate::core::nn::{self, ModelDownloadEvent, download_model_blocking};
+            use iced::futures::SinkExt;
+
+            // 防止重复点击：已有下载在跑就忽略
+            if matches!(app.model_download.status, crate::app::ModelDownloadStatus::Downloading { .. }) {
+                return Task::none();
+            }
+            let catalog = nn::load_download_catalog();
+            let Some(model) = catalog.into_iter().find(|m| m.id == id) else {
+                app.toast_err(tr("该模型不在下载清单中"));
+                return Task::none();
+            };
+
+            // 目标目录：主 models 目录（不存在则用 exe 同级的回退路径）
+            let dest_dir = nn::models_dir().0;
+            // 重复下载：目标文件已存在则直接提示，不覆盖
+            if dest_dir.join(&model.file).exists() {
+                app.toast(trf("模型「{}」已存在，已跳过重复下载", &[&model.name]));
+                app.model_download.status = crate::app::ModelDownloadStatus::Done {
+                    id: model.id.clone(),
+                };
+                return Task::none();
+            }
+
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            app.model_download.cancel = Some(cancel.clone());
+            app.model_download.status = crate::app::ModelDownloadStatus::Downloading {
+                id: model.id.clone(), name: model.name.clone(), received: 0, total: None,
+            };
+
+            let id_for_stream = model.id.clone();
+            return Task::stream(iced::stream::channel(8, async move |mut out| {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
+                let m = model.clone();
+                let d = dest_dir.clone();
+                let c = cancel.clone();
+                let handle = std::thread::spawn(move || {
+                    download_model_blocking(&m, &d, &c, |received, total| {
+                        let _ = tx.send((received, total));
+                    })
+                });
+                // 进度事件逐条回传 UI
+                while let Some((received, total)) = rx.recv().await {
+                    let _ = out.send(Message::Settings(SettingsMessage::ModelDownloadEvent(
+                        ModelDownloadEvent::Progress {
+                            id: id_for_stream.clone(), received, total,
+                        },
+                    ))).await;
+                }
+                let outcome = handle.join().unwrap_or_else(|_| {
+                    crate::core::nn::DownloadOutcome::Failed(tr("下载线程异常退出").to_string())
+                });
+                let ev = match outcome {
+                    crate::core::nn::DownloadOutcome::Done { file } => ModelDownloadEvent::Done { id: id_for_stream, file },
+                    crate::core::nn::DownloadOutcome::AlreadyExists { .. } => ModelDownloadEvent::Done { id: id_for_stream, file: String::new() },
+                    crate::core::nn::DownloadOutcome::Cancelled => ModelDownloadEvent::Failed { id: id_for_stream, msg: tr("已取消下载").to_string() },
+                    crate::core::nn::DownloadOutcome::Failed(e) => ModelDownloadEvent::Failed { id: id_for_stream, msg: e },
+                };
+                let _ = out.send(Message::Settings(SettingsMessage::ModelDownloadEvent(ev))).await;
+            }));
+        }
+        SettingsMessage::ModelDownloadEvent(ev) => {
+            use crate::core::nn::ModelDownloadEvent;
+            use crate::app::ModelDownloadStatus;
+            match ev {
+                ModelDownloadEvent::Progress { id, received, total } => {
+                    if let ModelDownloadStatus::Downloading { id: cur, name, .. } = &app.model_download.status {
+                        if cur == &id {
+                            app.model_download.status = ModelDownloadStatus::Downloading {
+                                id, name: name.clone(), received, total,
+                            };
+                        }
+                    }
+                }
+                ModelDownloadEvent::Done { id, .. } => {
+                    let name = match &app.model_download.status {
+                        ModelDownloadStatus::Downloading { name, .. } => name.clone(),
+                        _ => tr("模型").to_string(),
+                    };
+                    app.model_download.status = ModelDownloadStatus::Done { id: id.clone() };
+                    app.model_download.cancel = None;
+                    app.toast(trf("模型「{}」下载完成，已加入可选列表", &[&name]));
+                    // 下载完成 → 自动重扫，模型立刻可用于抠图
+                    return Task::done(Message::Work(crate::message::WorkMessage::RescanModels));
+                }
+                ModelDownloadEvent::Failed { id, msg } => {
+                    app.model_download.status = ModelDownloadStatus::Failed { id, msg: msg.clone() };
+                    app.model_download.cancel = None;
+                    app.toast_err(msg);
+                }
+            }
+        }
+        SettingsMessage::CancelModelDownload => {
+            if let Some(c) = &app.model_download.cancel {
+                c.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         SettingsMessage::RefreshDpi => {}
     }
     Task::none()
@@ -190,10 +288,11 @@ fn set_row<'a>(
 /// 1px `LINE_SOFT` 分隔，避免「每个设置项都是一张卡」的碎片感。
 /// 行内控件、消息与持久化行为完全不变。
 fn section_row<'a>(
-    label: &'a str,
+    label: impl Into<String>,
     desc: impl Into<String>,
     right: Element<'a, Message>,
 ) -> Element<'a, Message> {
+    let label = label.into();
     container(
         row![
             column![
@@ -567,7 +666,103 @@ fn plugin_panel<'a>(app: &'a App) -> Element<'a, Message> {
         }
     }
 
+    /* ── 卡② 模型下载：一键下载工具未内置的模型 ── */
+    let catalog = crate::core::nn::load_download_catalog();
+    let models_dir = app.work.models_dir.clone().unwrap_or_else(|| crate::core::nn::models_dir().0);
+    let busy = matches!(app.model_download.status, ModelDownloadStatus::Downloading { .. });
+    let mut download_rows: Vec<Element<'a, Message>> = Vec::new();
+
+    if catalog.is_empty() {
+        download_rows.push(section_row(
+            tr("暂无可下载模型"),
+            tr("可通过 COCOLE_MODEL_MANIFEST 环境变量指定自定义清单"),
+            Space::new().width(1.0).into(),
+        ));
+    }
+    for m in &catalog {
+        let installed = models_dir.join(&m.file).exists();
+        // 右侧控件：按「已安装 / 下载中 / 失败 / 空闲」四种状态切换
+        let right: Element<'a, Message> = if installed {
+            badge(tr("已就绪"), BadgeKind::Ok)
+        } else {
+            match &app.model_download.status {
+                ModelDownloadStatus::Downloading { id, received, total, .. } if id == &m.id => {
+                    let pct = match total {
+                        Some(t) if *t > 0 => (*received as f32 / *t as f32 * 100.0).min(100.0),
+                        _ => 0.0,
+                    };
+                    let txt = match total {
+                        Some(t) if *t > 0 => trf(
+                            "已下载 {} / {} MB",
+                            &[
+                                &format!("{:.1}", *received as f64 / 1048576.0),
+                                &format!("{:.1}", *t as f64 / 1048576.0),
+                            ],
+                        ),
+                        _ => trf("已下载 {} MB", &[&format!("{:.1}", *received as f64 / 1048576.0)]),
+                    };
+                    container(
+                        column![
+                            row![
+                                text(format!("{pct:.0}%")).size(FS_XS).color(TXT2()),
+                                text(txt).size(FS_XS).color(TXT3()),
+                                Space::new().width(6.0),
+                                button(text(tr("取消")).size(FS_XS))
+                                    .on_press(Message::Settings(SettingsMessage::CancelModelDownload))
+                                    .padding(pad(3.0, 8.0, 3.0, 8.0))
+                                    .style(btn_secondary),
+                            ]
+                            .spacing(8)
+                            .align_y(Alignment::Center),
+                            progress_bar(0.0..=100.0, pct),
+                        ]
+                        .spacing(5)
+                        .width(Length::Fixed(240.0)),
+                    )
+                    .into()
+                }
+                ModelDownloadStatus::Failed { id, msg } if id == &m.id => {
+                    // 错误文本限宽 + 按词换行：否则一整串长文本会占满行、把左侧
+                    // 的名称/描述挤成竖排（实测 BEN2 下载失败时整卡被撑爆）。
+                    container(
+                        column![
+                            text(msg)
+                                .size(FS_XS)
+                                .color(DANGER())
+                                .wrapping(text::Wrapping::Word)
+                                .width(Length::Fixed(240.0)),
+                            button(text(tr("重试")).size(FS_SM))
+                                .on_press(Message::Settings(SettingsMessage::DownloadModel(m.id.clone())))
+                                .padding(pad(4.0, 10.0, 4.0, 10.0))
+                                .style(btn_secondary),
+                        ]
+                        .spacing(4)
+                        .align_x(Alignment::End),
+                    )
+                    .width(Length::Fixed(240.0))
+                    .into()
+                }
+                ModelDownloadStatus::Done { id, .. } if id == &m.id => {
+                    badge(tr("刚下载完成，已可选"), BadgeKind::Ok)
+                }
+                _ => button(text(tr("一键下载")).size(FS_SM))
+                    .on_press(Message::Settings(SettingsMessage::DownloadModel(m.id.clone())))
+                    .padding(pad(5.0, 11.0, 5.0, 11.0))
+                    .style(btn_secondary)
+                    .into(),
+            }
+        };
+        let desc = if m.size_mb > 0.0 {
+            trf("{} · 约 {} MB", &[&m.desc, &format!("{:.0}", m.size_mb)])
+        } else {
+            m.desc.clone()
+        };
+        let _ = busy; // 下载中时其它行的按钮仍可点（update 层会忽略重复请求）
+        download_rows.push(section_row(m.name.clone(), desc, right));
+    }
+
     let col = column![
+        section_card(tr("模型下载"), None, download_rows),
         section_card(tr("模型目录与扫描"), Some(rescan_action), dir_rows),
         section_card(tr("已发现模型"), None, model_rows),
     ]

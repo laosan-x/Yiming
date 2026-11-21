@@ -557,6 +557,12 @@ pub enum SettingsMessage {
     ClearCache,
     /// 重新扫描 models/ 目录下的 ONNX 模型
     RescanModels,
+    /// 一键下载可下载模型（参数为 DownloadableModel.id）
+    DownloadModel(String),
+    /// 模型下载进度/完成/失败（后台线程经消息流回传）
+    ModelDownloadEvent(crate::core::nn::ModelDownloadEvent),
+    /// 取消进行中的模型下载
+    CancelModelDownload,
     /// 刷新系统 DPI 检测
     RefreshDpi,
 }

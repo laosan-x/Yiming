@@ -1,0 +1,131 @@
+{
+  "time": "2026-11-21 16:28:06",
+  "items": [
+    {
+      "path": "fc_timeline.jsonl",
+      "type": "file",
+      "status": "已移入回收站(测试)",
+      "md5": "0555c3c56c13"
+    },
+    {
+      "path": "Concat导入包_壹鸣Wonderland复刻",
+      "type": "dir",
+      "files": 10,
+      "bytes": 7817337
+    },
+    {
+      "path": "Concat导入包_壹鸣Wonderland复刻.zip",
+      "type": "file",
+      "bytes": 7234420,
+      "md5": "de473174465736c263445e771f6fff42"
+    },
+    {
+      "path": "FilmCraft验证片_壹鸣Wonderland.mp4",
+      "type": "file",
+      "bytes": 16030897,
+      "md5": "ce2da5fb64dfac7db34085cd2834681a"
+    },
+    {
+      "path": "assets_bcut_cards",
+      "type": "dir",
+      "files": 5,
+      "bytes": 105007
+    },
+    {
+      "path": "assets_clips_color",
+      "type": "dir",
+      "files": 12,
+      "bytes": 2988147
+    },
+    {
+      "path": "assets_clips_gray",
+      "type": "dir",
+      "files": 8,
+      "bytes": 2035345
+    },
+    {
+      "path": "assets_ref_bgm",
+      "type": "dir",
+      "files": 9,
+      "bytes": 5762907
+    },
+    {
+      "path": "bcut_draft_v2.bjson",
+      "type": "file",
+      "bytes": 49491,
+      "md5": "38bc1f3ad0bbe2594e4a4727e565dd4c"
+    },
+    {
+      "path": "fc_demo.fcproj",
+      "type": "file",
+      "bytes": 29350,
+      "md5": "89cc1626f69ff9f3dbe8e514d6f1b616"
+    },
+    {
+      "path": ".fc_demo.fcproj.lock",
+      "type": "file",
+      "bytes": 0,
+      "md5": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "path": "fc_test.fcproj",
+      "type": "file",
+      "bytes": 3293,
+      "md5": "af96622808f4191c6d7cdee5e3ebeebb"
+    },
+    {
+      "path": "fc_dialog.png",
+      "type": "file",
+      "bytes": 507798,
+      "md5": "af0ec4d5c239b0ae53cfe07bf69b9431"
+    },
+    {
+      "path": "fc_ui.png",
+      "type": "file",
+      "bytes": 184722,
+      "md5": "089a5dc4cb1bb23b4f1f925d5f24ec1b"
+    },
+    {
+      "path": "fc_ui3.png",
+      "type": "file",
+      "bytes": 501867,
+      "md5": "779aedb1415ccf50b3bfd69682245b19"
+    },
+    {
+      "path": "fc_frames",
+      "type": "dir",
+      "files": 10,
+      "bytes": 1568275
+    },
+    {
+      "path": "壹鸣Wonderland_复刻_xml_raw.xml",
+      "type": "file",
+      "bytes": 21766,
+      "md5": "64a8040bbd95c6f2d37eba409aec86f1"
+    },
+    {
+      "path": "docs/DeepSeek风格复刻方案_黑白灰.md",
+      "type": "file",
+      "bytes": 9739,
+      "md5": "b305b100c0ccf56e2e24a25d26701d2a"
+    },
+    {
+      "path": "docs/FilmCraft修改操作指南.md",
+      "type": "file",
+      "bytes": 5306,
+      "md5": "953052a1dff3970b6d4bbceab65d7eaf"
+    },
+    {
+      "path": "docs/情绪驱动剪辑优化方案_v2.md",
+      "type": "file",
+      "bytes": 6532,
+      "md5": "c5afe8bd7c85ad0944cc895f91600687"
+    },
+    {
+      "path": "docs/抠图工具_介绍方案与脚本.md",
+      "type": "file",
+      "bytes": 10110,
+      "md5": "c4b6c96a644a35f17ad356cc22ac3402"
+    }
+  ]
+}
