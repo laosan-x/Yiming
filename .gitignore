@@ -3,9 +3,14 @@ target/
 dist/
 
 # ── 第三方运行时（README 提供下载指引，不入库）──
+# 例外：CI 门禁需要的两个测试资产入库（共约 20MB），
+# 避免 runner 每次联网下载 github release 大文件失败（2026-11-21 连续三次 CI 挂于此步）。
 nsis-3.10/
-ort-libs/
+ort-libs/*
+!ort-libs/onnxruntime.dll
+!ort-libs/onnxruntime_providers_shared.dll
 models/*.onnx
+!models/u2netp.onnx
 
 # ── 临时 / 个人文件 ──
 icon_debug.log
